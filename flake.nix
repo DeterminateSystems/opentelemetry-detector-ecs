@@ -104,7 +104,8 @@
           '';
 
           nixfmt = pkgs.runCommand "check-nixfmt" { } ''
-            ${lib.getExe pkgs.nixfmt} --check ${self}
+            find ${self} -name '*.nix' -print0 \
+              | xargs -0 ${lib.getExe pkgs.nixfmt} --check
             touch $out
           '';
 
@@ -128,6 +129,7 @@
               pkgs.cargo-machete
               pkgs.cargo-outdated
               pkgs.eclint
+              pkgs.jq
               pkgs.nixfmt
               pkgs.rust-analyzer
               pkgs.typos
