@@ -1,6 +1,30 @@
+//! An OpenTelemetry resource detector for Amazon ECS.
+//!
+//! [`EcsResourceDetector`] reads the ECS task metadata endpoint and reports the
+//! cloud, container, task, and log attributes named by the [semantic
+//! conventions for ECS][conventions]. Anywhere else it reports nothing, so a
+//! program that also runs outside ECS can register it unconditionally:
+//!
+//! ```
+//! use opentelemetry_detector_ecs::EcsResourceDetector;
+//! use opentelemetry_sdk::Resource;
+//!
+//! let resource = Resource::builder()
+//!     .with_detector(Box::new(EcsResourceDetector))
+//!     .build();
+//! ```
+//!
+//! Detection blocks for up to two seconds while it queries the metadata
+//! endpoint, and it reports whatever it has gathered so far if the endpoint
+//! answers slowly, partially, or not at all.
+//!
+//! [conventions]: https://opentelemetry.io/docs/specs/semconv/resource/cloud-provider/aws/ecs/
+//
 // Ported from the Go detector in opentelemetry-go-contrib, which is also
 // licensed under the Apache License, Version 2.0:
 // https://github.com/open-telemetry/opentelemetry-go-contrib/blob/4610324d288f2b56faf237d67b85678f8e6de387/detectors/aws/ecs/ecs.go
+
+#![deny(missing_docs)]
 
 use std::sync::OnceLock;
 use std::time::Duration;
@@ -58,9 +82,23 @@ struct LogOptions {
     region: String,
 }
 
+/// Describes the Amazon ECS task the current process belongs to.
+///
+/// The detector recognizes ECS by the `ECS_CONTAINER_METADATA_URI_V4` and
+/// `ECS_CONTAINER_METADATA_URI` environment variables. Given the v4 endpoint it
+/// reports the full set of attributes; given only v3 it reports the container
+/// name and ID; given neither it reports an empty [`Resource`].
+///
+/// See the [crate documentation](crate) for an example.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct EcsResourceDetector;
 
 impl EcsResourceDetector {
+    /// Builds a detector.
+    pub fn new() -> Self {
+        Self
+    }
+
     fn detected_resource(attrs: Vec<KeyValue>) -> Resource {
         Resource::builder_empty().with_attributes(attrs).build()
     }
