@@ -2,6 +2,7 @@
 // licensed under the Apache License, Version 2.0:
 // https://github.com/open-telemetry/opentelemetry-go-contrib/blob/4610324d288f2b56faf237d67b85678f8e6de387/detectors/aws/ecs/ecs.go
 
+use std::sync::OnceLock;
 use std::time::Duration;
 
 use arn::naive::NaiveArn;
@@ -55,10 +56,7 @@ impl EcsResourceDetector {
     }
 
     fn container_id() -> Option<String> {
-        let data = std::fs::read_to_string("/proc/self/cgroup").ok()?;
-        let re = Regex::new(r"/ecs/[^/]+/([a-f0-9]{64})$").unwrap();
-        data.lines()
-            .find_map(|l| re.captures(l).map(|c| c[1].to_string()))
+        container_id_from_cgroup(&std::fs::read_to_string("/proc/self/cgroup").ok()?)
     }
 
     /// Turns a bare `cluster-name` into a full ARN, using partition/region/account
@@ -200,6 +198,19 @@ impl ResourceDetector for EcsResourceDetector {
 
         Self::detected_resource(attrs)
     }
+}
+
+/// Pulls the 64-character Docker container ID out of a cgroup file, if one of
+/// its lines names an ECS container.
+fn container_id_from_cgroup(cgroup: &str) -> Option<String> {
+    static PATTERN: OnceLock<Regex> = OnceLock::new();
+
+    let pattern = PATTERN
+        .get_or_init(|| Regex::new(r"/ecs/[^/]+/([a-f0-9]{64})$").expect("the pattern is valid"));
+
+    cgroup
+        .lines()
+        .find_map(|line| pattern.captures(line).map(|c| c[1].to_string()))
 }
 
 fn hostname_fallback() -> Result<String, std::io::Error> {
