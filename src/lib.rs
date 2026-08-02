@@ -307,9 +307,39 @@ fn hostname_fallback() -> Result<String, std::io::Error> {
 
 #[cfg(test)]
 mod tests {
-    use opentelemetry::Key;
+    use opentelemetry::{Key, Value};
 
     use super::*;
+
+    /// The examples AWS publishes for the task metadata endpoint, version 4.
+    const TASK_JSON: &str = include_str!("../tests/fixtures/task.json");
+    const CONTAINER_JSON: &str = include_str!("../tests/fixtures/container.json");
+
+    const TASK_ARN: &str =
+        "arn:aws:ecs:us-west-2:111122223333:task/default/158d1c8083dd49d6b527399fd6414f5c";
+
+    fn task() -> TaskMetadataV4 {
+        serde_json::from_str(TASK_JSON).expect("the task fixture parses")
+    }
+
+    fn container() -> ContainerMetadataV4 {
+        serde_json::from_str(CONTAINER_JSON).expect("the container fixture parses")
+    }
+
+    fn attribute<'a>(attrs: &'a [KeyValue], key: &str) -> Option<&'a Value> {
+        attrs
+            .iter()
+            .find(|kv| kv.key.as_str() == key)
+            .map(|kv| &kv.value)
+    }
+
+    fn assert_attribute(attrs: &[KeyValue], key: &str, expected: &str) {
+        assert_eq!(
+            attribute(attrs, key).map(ToString::to_string).as_deref(),
+            Some(expected),
+            "attribute {key}"
+        );
+    }
 
     #[test]
     fn detected_resource_does_not_include_default_service_name() {
@@ -321,5 +351,159 @@ mod tests {
             Some("aws".into())
         );
         assert_eq!(resource.get(&Key::new("service.name")), None);
+    }
+
+    #[test]
+    fn detects_nothing_off_of_ecs() {
+        // Both metadata variables are absent under `cargo test`, so the
+        // detector has nothing to go on.
+        assert_eq!(
+            EcsResourceDetector.detect(),
+            Resource::builder_empty().build()
+        );
+    }
+
+    #[test]
+    fn task_attributes_describe_the_task() {
+        let task = task();
+        let task_ref = NaiveArn::parse(&task.task_arn).expect("the task ARN parses");
+        let attrs = task_attributes(&task, &task_ref);
+
+        assert_attribute(&attrs, sc::CLOUD_REGION, "us-west-2");
+        assert_attribute(&attrs, sc::CLOUD_ACCOUNT_ID, "111122223333");
+        assert_attribute(&attrs, sc::CLOUD_AVAILABILITY_ZONE, "us-west-2d");
+        assert_attribute(&attrs, "aws.ecs.task.arn", TASK_ARN);
+        assert_attribute(&attrs, "aws.ecs.task.family", "curltest");
+        assert_attribute(&attrs, "aws.ecs.task.revision", "26");
+    }
+
+    #[test]
+    fn task_attributes_qualify_a_bare_cluster_name() {
+        let task = task();
+        let task_ref = NaiveArn::parse(&task.task_arn).expect("the task ARN parses");
+        let attrs = task_attributes(&task, &task_ref);
+
+        assert_attribute(
+            &attrs,
+            "aws.ecs.cluster.arn",
+            "arn:aws:ecs:us-west-2:111122223333:cluster/default",
+        );
+    }
+
+    #[test]
+    fn task_attributes_lowercase_the_launch_type() {
+        let task = task();
+        let task_ref = NaiveArn::parse(&task.task_arn).expect("the task ARN parses");
+        let attrs = task_attributes(&task, &task_ref);
+
+        assert_attribute(&attrs, "aws.ecs.launchtype", "ec2");
+    }
+
+    #[test]
+    fn container_attributes_describe_the_container_and_its_logs() {
+        let task = task();
+        let task_ref = NaiveArn::parse(&task.task_arn).expect("the task ARN parses");
+        let attrs = container_attributes(&container(), &task_ref);
+
+        let container_arn =
+            "arn:aws:ecs:us-west-2:111122223333:container/acfcddf8-14b5-4d2a-9c1c-4b5e0ee2b8b4";
+        assert_attribute(&attrs, sc::CLOUD_RESOURCE_ID, container_arn);
+        assert_attribute(&attrs, "aws.ecs.container.arn", container_arn);
+
+        assert_attribute(&attrs, "aws.log.group.names", "/ecs/metadata");
+        assert_attribute(
+            &attrs,
+            "aws.log.group.arns",
+            "arn:aws:logs:us-west-2:111122223333:log-group:/ecs/metadata:*",
+        );
+        assert_attribute(
+            &attrs,
+            "aws.log.stream.names",
+            "ecs/curl/8f03e41243824aea923aca126495f665",
+        );
+        assert_attribute(
+            &attrs,
+            "aws.log.stream.arns",
+            "arn:aws:logs:us-west-2:111122223333:log-group:/ecs/metadata:log-stream:ecs/curl/8f03e41243824aea923aca126495f665",
+        );
+    }
+
+    #[test]
+    fn container_attributes_skip_the_logs_of_another_driver() {
+        let task = task();
+        let task_ref = NaiveArn::parse(&task.task_arn).expect("the task ARN parses");
+
+        let mut container = container();
+        container.log_driver = "json-file".to_string();
+        let attrs = container_attributes(&container, &task_ref);
+
+        assert_eq!(attribute(&attrs, "aws.log.group.names"), None);
+        assert_eq!(attribute(&attrs, "aws.log.stream.names"), None);
+    }
+
+    #[test]
+    fn log_attributes_fall_back_to_the_container_region() {
+        let task = task();
+        let task_ref = NaiveArn::parse(&task.task_arn).expect("the task ARN parses");
+
+        let container_arn = "arn:aws:ecs:eu-central-1:111122223333:container/abc";
+        let container_ref = NaiveArn::parse(container_arn).expect("the container ARN parses");
+
+        let options = LogOptions {
+            group: "/ecs/metadata".to_string(),
+            stream: "ecs/curl/abc".to_string(),
+            region: String::new(),
+        };
+        let attrs = log_attributes(&options, Some(&container_ref), &task_ref);
+
+        assert_attribute(
+            &attrs,
+            "aws.log.group.arns",
+            "arn:aws:logs:eu-central-1:111122223333:log-group:/ecs/metadata:*",
+        );
+    }
+
+    #[test]
+    fn log_attributes_need_both_a_group_and_a_stream() {
+        let task = task();
+        let task_ref = NaiveArn::parse(&task.task_arn).expect("the task ARN parses");
+
+        let options = LogOptions {
+            group: "/ecs/metadata".to_string(),
+            ..Default::default()
+        };
+
+        assert!(log_attributes(&options, None, &task_ref).is_empty());
+    }
+
+    #[test]
+    fn qualify_leaves_a_full_arn_alone() {
+        let task_ref = NaiveArn::parse(TASK_ARN).expect("the task ARN parses");
+        let arn = "arn:aws:ecs:us-east-1:444455556666:cluster/other";
+
+        assert_eq!(qualify(arn, "cluster", &task_ref), arn);
+    }
+
+    #[test]
+    fn container_id_comes_from_the_cgroup() {
+        let cgroup = "\
+11:devices:/ecs/158d1c8083dd49d6b527399fd6414f5c/43481a6ce4842eec8fe72fc28500c6b52edcc0917f105b83379f88cac1ff3946
+10:memory:/ecs/158d1c8083dd49d6b527399fd6414f5c/43481a6ce4842eec8fe72fc28500c6b52edcc0917f105b83379f88cac1ff3946
+";
+
+        assert_eq!(
+            container_id_from_cgroup(cgroup).as_deref(),
+            Some("43481a6ce4842eec8fe72fc28500c6b52edcc0917f105b83379f88cac1ff3946")
+        );
+    }
+
+    #[test]
+    fn container_id_ignores_a_cgroup_from_elsewhere() {
+        let cgroup = "\
+11:devices:/user.slice
+10:memory:/docker/43481a6ce4842eec8fe72fc28500c6b52edcc0917f105b83379f88cac1ff3946
+";
+
+        assert_eq!(container_id_from_cgroup(cgroup), None);
     }
 }

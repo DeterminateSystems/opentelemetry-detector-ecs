@@ -1,0 +1,24 @@
+{
+  "DockerId": "43481a6ce4842eec8fe72fc28500c6b52edcc0917f105b83379f88cac1ff3946",
+  "Name": "curl",
+  "DockerName": "ecs-curltest-24-curl-cca48e8dcadd97805600",
+  "Image": "111122223333.dkr.ecr.us-west-2.amazonaws.com/curltest:latest",
+  "DesiredStatus": "RUNNING",
+  "KnownStatus": "RUNNING",
+  "Limits": {
+    "CPU": 10,
+    "Memory": 128
+  },
+  "CreatedAt": "2020-10-02T00:43:06.196469886Z",
+  "StartedAt": "2020-10-02T00:43:06.522504529Z",
+  "Type": "NORMAL",
+  "LogDriver": "awslogs",
+  "LogOptions": {
+    "awslogs-create-group": "true",
+    "awslogs-group": "/ecs/metadata",
+    "awslogs-stream": "ecs/curl/8f03e41243824aea923aca126495f665",
+    "awslogs-region": "us-west-2"
+  },
+  "ContainerARN": "arn:aws:ecs:us-west-2:111122223333:container/acfcddf8-14b5-4d2a-9c1c-4b5e0ee2b8b4",
+  "Networks": []
+}
