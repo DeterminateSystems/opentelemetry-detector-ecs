@@ -1,0 +1,27 @@
+[package]
+name = "opentelemetry-detector-ecs"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.82"
+license = "Apache-2.0"
+description = "An OpenTelemetry resource detector for Amazon ECS."
+repository = "https://github.com/DeterminateSystems/opentelemetry-detector-ecs"
+documentation = "https://docs.rs/opentelemetry-detector-ecs"
+readme = "README.md"
+keywords = ["opentelemetry", "ecs", "aws", "observability", "tracing"]
+categories = ["development-tools::debugging", "development-tools::profiling"]
+
+[dependencies]
+arn = "0.1.0"
+opentelemetry = { version = "0.32.0", default-features = false }
+opentelemetry-semantic-conventions = { version = "0.32.1", features = [
+  "semconv_experimental",
+] }
+opentelemetry_sdk = { version = "0.32.1", default-features = false }
+regex = { version = "1.13.1", default-features = false }
+reqwest = { version = "0.13.4", features = [
+  "blocking",
+  "json",
+], default-features = false }
+serde = { version = "1.0.229", default-features = false, features = ["derive"] }
+serde_json = "1.0.150"
