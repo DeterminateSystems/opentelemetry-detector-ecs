@@ -26,6 +26,7 @@ It reports whatever it has gathered so far if the endpoint or the APIs answer sl
 ## Attributes
 
 Every key below is a public constant in the crate's `attributes` module, re-exported from [`opentelemetry-semantic-conventions`](https://docs.rs/opentelemetry-semantic-conventions).
+The one exception is `aws.ecs.container_instance.tag.*`, which the semantic conventions do not name; the crate defines that prefix itself.
 
 | Attribute                                                          | Source                                     |
 | ------------------------------------------------------------------ | ------------------------------------------ |
@@ -38,7 +39,7 @@ Every key below is a public constant in the crate's `attributes` module, re-expo
 | `aws.ecs.task.arn`, `aws.ecs.task.family`, `aws.ecs.task.revision` | The task metadata                          |
 | `cloud.resource_id`, `aws.ecs.container.arn`                       | The container metadata                     |
 | `aws.log.group.*`, `aws.log.stream.*`                              | The `awslogs` log driver options           |
-| `host.id`                                                          | The ECS and Systems Manager APIs           |
+| `host.id`                                                          | The ECS APIs                               |
 | `aws.ecs.container_instance.tag.*`                                 | The ECS and Systems Manager APIs           |
 
 The rows from `cloud.region` down need the v4 metadata endpoint.
