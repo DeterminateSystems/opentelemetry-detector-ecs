@@ -267,6 +267,7 @@ mod tests {
         DescribeContainerInstancesError, DescribeContainerInstancesOutput,
     };
     use aws_sdk_ecs::operation::describe_tasks::{DescribeTasksError, DescribeTasksOutput};
+    use aws_sdk_ssm::operation::list_tags_for_resource::ListTagsForResourceError;
     use aws_smithy_mocks::{
         MockResponseInterceptor, Rule, RuleMode, create_mock_http_client, mock,
     };
@@ -574,6 +575,64 @@ mod tests {
             [format!(
                 "ECS knows no instance ID for {CONTAINER_INSTANCE_ARN}"
             )]
+        );
+    }
+
+    #[tokio::test]
+    async fn notes_a_role_that_cannot_list_tags() {
+        // Systems Manager models no access denied error for this call, so the
+        // code arrives as metadata on an otherwise unhandled one.
+        let denied = mock!(aws_sdk_ssm::Client::list_tags_for_resource)
+            .then_error(|| ListTagsForResourceError::generic(access_denied()));
+
+        let ecs = client!(
+            aws_sdk_ecs,
+            describes_the_task(),
+            describes_the_container_instance()
+        );
+        let ssm = client!(aws_sdk_ssm, denied);
+
+        let lookup = managed_instance(&ecs, &ssm, CLUSTER, TASK_ARN).await;
+
+        // The ID survives the tags the lookup could not reach.
+        assert_eq!(
+            attributes_of(&lookup),
+            [(attr::HOST_ID.to_string(), INSTANCE_ID.to_string())]
+        );
+        assert_eq!(
+            lookup.notices,
+            ["the task role cannot call ssm:ListTagsForResource"]
+        );
+    }
+
+    #[tokio::test]
+    async fn notes_an_instance_systems_manager_does_not_know() {
+        let unknown = mock!(aws_sdk_ssm::Client::list_tags_for_resource).then_error(|| {
+            ListTagsForResourceError::InvalidResourceId(
+                aws_sdk_ssm::types::error::InvalidResourceId::builder().build(),
+            )
+        });
+
+        let ecs = client!(
+            aws_sdk_ecs,
+            describes_the_task(),
+            describes_the_container_instance()
+        );
+        let ssm = client!(aws_sdk_ssm, unknown);
+
+        let lookup = managed_instance(&ecs, &ssm, CLUSTER, TASK_ARN).await;
+
+        assert_eq!(
+            attributes_of(&lookup),
+            [(attr::HOST_ID.to_string(), INSTANCE_ID.to_string())]
+        );
+
+        let [notice] = &lookup.notices[..] else {
+            panic!("expected one notice, got {:?}", lookup.notices);
+        };
+        assert!(
+            notice.starts_with("ssm:ListTagsForResource failed: "),
+            "notice {notice:?}"
         );
     }
 }
