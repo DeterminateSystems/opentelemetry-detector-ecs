@@ -262,8 +262,11 @@ where
 mod tests {
     use aws_sdk_ecs::config::Credentials;
     use aws_sdk_ecs::config::retry::RetryConfig;
-    use aws_sdk_ecs::operation::describe_container_instances::DescribeContainerInstancesOutput;
-    use aws_sdk_ecs::operation::describe_tasks::DescribeTasksOutput;
+    use aws_sdk_ecs::error::ErrorMetadata;
+    use aws_sdk_ecs::operation::describe_container_instances::{
+        DescribeContainerInstancesError, DescribeContainerInstancesOutput,
+    };
+    use aws_sdk_ecs::operation::describe_tasks::{DescribeTasksError, DescribeTasksOutput};
     use aws_smithy_mocks::{
         MockResponseInterceptor, Rule, RuleMode, create_mock_http_client, mock,
     };
@@ -298,6 +301,14 @@ mod tests {
                     .build(),
             )
         }};
+    }
+
+    /// The metadata AWS attaches to a call the caller has no permission for.
+    fn access_denied() -> ErrorMetadata {
+        ErrorMetadata::builder()
+            .code(ACCESS_DENIED)
+            .message("User is not authorized to perform this action")
+            .build()
     }
 
     /// A `DescribeTasks` that names the container instance holding the task.
@@ -424,5 +435,145 @@ mod tests {
             [(attr::HOST_ID.to_string(), INSTANCE_ID.to_string())]
         );
         assert_eq!(lookup.notices, Vec::<String>::new());
+    }
+
+    #[tokio::test]
+    async fn notes_a_role_that_cannot_describe_tasks() {
+        let denied = mock!(aws_sdk_ecs::Client::describe_tasks).then_error(|| {
+            DescribeTasksError::AccessDeniedException(
+                aws_sdk_ecs::types::error::AccessDeniedException::builder()
+                    .meta(access_denied())
+                    .build(),
+            )
+        });
+
+        let ecs = client!(aws_sdk_ecs, denied);
+        let ssm = client!(aws_sdk_ssm, lists_tags(&[]));
+
+        let lookup = managed_instance(&ecs, &ssm, CLUSTER, TASK_ARN).await;
+
+        assert_eq!(attributes_of(&lookup), []);
+        assert_eq!(
+            lookup.notices,
+            ["the task role cannot call ecs:DescribeTasks"]
+        );
+    }
+
+    #[tokio::test]
+    async fn notes_a_role_that_cannot_describe_container_instances() {
+        let denied = mock!(aws_sdk_ecs::Client::describe_container_instances).then_error(|| {
+            DescribeContainerInstancesError::AccessDeniedException(
+                aws_sdk_ecs::types::error::AccessDeniedException::builder()
+                    .meta(access_denied())
+                    .build(),
+            )
+        });
+
+        let ecs = client!(aws_sdk_ecs, describes_the_task(), denied);
+        let ssm = client!(aws_sdk_ssm, lists_tags(&[]));
+
+        let lookup = managed_instance(&ecs, &ssm, CLUSTER, TASK_ARN).await;
+
+        assert_eq!(attributes_of(&lookup), []);
+        assert_eq!(
+            lookup.notices,
+            ["the task role cannot call ecs:DescribeContainerInstances"]
+        );
+    }
+
+    #[tokio::test]
+    async fn notes_a_cluster_ecs_does_not_know() {
+        let missing = mock!(aws_sdk_ecs::Client::describe_tasks).then_error(|| {
+            DescribeTasksError::ClusterNotFoundException(
+                aws_sdk_ecs::types::error::ClusterNotFoundException::builder()
+                    .message("Cluster not found.")
+                    .build(),
+            )
+        });
+
+        let ecs = client!(aws_sdk_ecs, missing);
+        let ssm = client!(aws_sdk_ssm, lists_tags(&[]));
+
+        let lookup = managed_instance(&ecs, &ssm, CLUSTER, TASK_ARN).await;
+
+        assert_eq!(attributes_of(&lookup), []);
+
+        // Anything but a missing permission says so in the service's own words.
+        let [notice] = &lookup.notices[..] else {
+            panic!("expected one notice, got {:?}", lookup.notices);
+        };
+        assert!(
+            notice.starts_with("ecs:DescribeTasks failed: "),
+            "notice {notice:?}"
+        );
+        assert!(notice.contains("Cluster not found."), "notice {notice:?}");
+    }
+
+    #[tokio::test]
+    async fn notes_a_task_ecs_does_not_return() {
+        let empty = mock!(aws_sdk_ecs::Client::describe_tasks)
+            .then_output(|| DescribeTasksOutput::builder().build());
+
+        let ecs = client!(aws_sdk_ecs, empty);
+        let ssm = client!(aws_sdk_ssm, lists_tags(&[]));
+
+        let lookup = managed_instance(&ecs, &ssm, CLUSTER, TASK_ARN).await;
+
+        assert_eq!(attributes_of(&lookup), []);
+        assert_eq!(
+            lookup.notices,
+            [format!("ECS knows no container instance for {TASK_ARN}")]
+        );
+    }
+
+    #[tokio::test]
+    async fn notes_a_task_on_no_container_instance() {
+        // A task ECS itself hosts, which the launch type should have ruled out.
+        let hosted = mock!(aws_sdk_ecs::Client::describe_tasks).then_output(|| {
+            DescribeTasksOutput::builder()
+                .tasks(
+                    aws_sdk_ecs::types::Task::builder()
+                        .task_arn(TASK_ARN)
+                        .build(),
+                )
+                .build()
+        });
+
+        let ecs = client!(aws_sdk_ecs, hosted);
+        let ssm = client!(aws_sdk_ssm, lists_tags(&[]));
+
+        let lookup = managed_instance(&ecs, &ssm, CLUSTER, TASK_ARN).await;
+
+        assert_eq!(attributes_of(&lookup), []);
+        assert_eq!(
+            lookup.notices,
+            [format!("ECS knows no container instance for {TASK_ARN}")]
+        );
+    }
+
+    #[tokio::test]
+    async fn notes_a_container_instance_with_no_instance_id() {
+        let nameless = mock!(aws_sdk_ecs::Client::describe_container_instances).then_output(|| {
+            DescribeContainerInstancesOutput::builder()
+                .container_instances(
+                    aws_sdk_ecs::types::ContainerInstance::builder()
+                        .container_instance_arn(CONTAINER_INSTANCE_ARN)
+                        .build(),
+                )
+                .build()
+        });
+
+        let ecs = client!(aws_sdk_ecs, describes_the_task(), nameless);
+        let ssm = client!(aws_sdk_ssm, lists_tags(&[]));
+
+        let lookup = managed_instance(&ecs, &ssm, CLUSTER, TASK_ARN).await;
+
+        assert_eq!(attributes_of(&lookup), []);
+        assert_eq!(
+            lookup.notices,
+            [format!(
+                "ECS knows no instance ID for {CONTAINER_INSTANCE_ARN}"
+            )]
+        );
     }
 }
