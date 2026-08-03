@@ -42,10 +42,11 @@ A task on the v3 endpoint gets the container name and ID alone.
 
 ```console
 $ nix develop
-$ cargo test
+$ just
 ```
 
-`nix flake check` runs everything CI runs: the tests, Clippy, rustdoc, and the formatting and spelling checks.
+The flake supplies the tools and the [Justfile](./Justfile) decides what to run with them, so `just ci` runs exactly what CI runs: the tests, Clippy, rustdoc, the formatting and spelling checks, and a packaging dry run.
+Run `just` alone to list the recipes, or `just fmt` to format the tree in place.
 
 ## Releasing
 
