@@ -23,8 +23,8 @@ Detection blocks for up to two seconds while it queries the metadata endpoint, a
 
 ## Attributes
 
-| Attribute                                                        | Source                                     |
-| ---------------------------------------------------------------- | ------------------------------------------ |
+| Attribute                                                          | Source                                     |
+| ------------------------------------------------------------------ | ------------------------------------------ |
 | `cloud.provider`, `cloud.platform`                                 | Constant                                   |
 | `container.name`                                                   | `$HOSTNAME`, or `/proc/sys/kernel/hostname` |
 | `container.id`                                                     | `/proc/self/cgroup`                        |
