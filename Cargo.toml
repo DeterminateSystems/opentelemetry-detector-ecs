@@ -1,7 +1,7 @@
 [package]
 name = "opentelemetry-detector-ecs"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 license = "Apache-2.0"
 description = "An OpenTelemetry resource detector for Amazon ECS."
 repository = "https://github.com/DeterminateSystems/opentelemetry-detector-ecs"

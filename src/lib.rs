@@ -228,11 +228,11 @@ fn container_attributes(container: &ContainerMetadataV4, task_ref: &NaiveArn) ->
 
     let container_arn = qualify(&container.container_arn, "container", task_ref);
 
-    if container.log_driver == "awslogs" {
-        if let Some(options) = &container.log_options {
-            let container_ref = NaiveArn::parse(&container_arn).ok();
-            attrs.extend(log_attributes(options, container_ref.as_ref(), task_ref));
-        }
+    if container.log_driver == "awslogs"
+        && let Some(options) = &container.log_options
+    {
+        let container_ref = NaiveArn::parse(&container_arn).ok();
+        attrs.extend(log_attributes(options, container_ref.as_ref(), task_ref));
     }
 
     attrs.push(KeyValue::new(sc::CLOUD_RESOURCE_ID, container_arn.clone()));
