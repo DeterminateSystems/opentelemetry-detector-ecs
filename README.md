@@ -23,6 +23,8 @@ Detection blocks for up to two seconds while it queries the metadata endpoint, a
 
 ## Attributes
 
+Every key below is a public constant in the crate's `attributes` module, re-exported from [`opentelemetry-semantic-conventions`](https://docs.rs/opentelemetry-semantic-conventions).
+
 | Attribute                                                          | Source                                     |
 | ------------------------------------------------------------------ | ------------------------------------------ |
 | `cloud.provider`, `cloud.platform`                                 | Constant                                   |

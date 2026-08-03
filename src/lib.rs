@@ -14,6 +14,8 @@
 //!     .build();
 //! ```
 //!
+//! Every key it reports is a public constant in [`attributes`].
+//!
 //! Detection blocks for up to two seconds while it queries the metadata
 //! endpoint, and it reports whatever it has gathered so far if the endpoint
 //! answers slowly, partially, or not at all.
@@ -32,9 +34,26 @@ use std::time::Duration;
 use arn::naive::NaiveArn;
 use opentelemetry::KeyValue;
 use opentelemetry_sdk::resource::{Resource, ResourceDetector};
-use opentelemetry_semantic_conventions::resource as sc;
 use regex::Regex;
 use serde::Deserialize;
+
+use crate::attributes as attr;
+
+/// Every resource attribute key the detector reports.
+///
+/// The keys come from [`opentelemetry_semantic_conventions`], which names them
+/// all, so a caller can match on what the detector produces without depending
+/// on that crate directly. The detector itself reads them from here, so the two
+/// lists cannot drift apart.
+pub mod attributes {
+    pub use opentelemetry_semantic_conventions::resource::{
+        AWS_ECS_CLUSTER_ARN, AWS_ECS_CONTAINER_ARN, AWS_ECS_LAUNCHTYPE, AWS_ECS_TASK_ARN,
+        AWS_ECS_TASK_FAMILY, AWS_ECS_TASK_REVISION, AWS_LOG_GROUP_ARNS, AWS_LOG_GROUP_NAMES,
+        AWS_LOG_STREAM_ARNS, AWS_LOG_STREAM_NAMES, CLOUD_ACCOUNT_ID, CLOUD_AVAILABILITY_ZONE,
+        CLOUD_PLATFORM, CLOUD_PROVIDER, CLOUD_REGION, CLOUD_RESOURCE_ID, CONTAINER_ID,
+        CONTAINER_NAME,
+    };
+}
 
 /// The environment variable ECS sets to the task metadata endpoint, version 4.
 const V4_URI_VAR: &str = "ECS_CONTAINER_METADATA_URI_V4";
@@ -131,15 +150,15 @@ impl ResourceDetector for EcsResourceDetector {
         }
 
         let mut attrs = vec![
-            KeyValue::new(sc::CLOUD_PROVIDER, "aws"),
-            KeyValue::new(sc::CLOUD_PLATFORM, "aws_ecs"),
+            KeyValue::new(attr::CLOUD_PROVIDER, "aws"),
+            KeyValue::new(attr::CLOUD_PLATFORM, "aws_ecs"),
         ];
 
         if let Ok(name) = std::env::var("HOSTNAME").or_else(|_| hostname_fallback()) {
-            attrs.push(KeyValue::new(sc::CONTAINER_NAME, name));
+            attrs.push(KeyValue::new(attr::CONTAINER_NAME, name));
         }
         if let Some(id) = Self::container_id() {
-            attrs.push(KeyValue::new(sc::CONTAINER_ID, id));
+            attrs.push(KeyValue::new(attr::CONTAINER_ID, id));
         }
 
         // The v3 endpoint carries none of the attributes below, so a v3-only
@@ -191,30 +210,33 @@ fn task_attributes(task: &TaskMetadataV4, task_ref: &NaiveArn) -> Vec<KeyValue> 
     let mut attrs = Vec::new();
 
     if let Some(region) = task_ref.region {
-        attrs.push(KeyValue::new(sc::CLOUD_REGION, region.to_string()));
+        attrs.push(KeyValue::new(attr::CLOUD_REGION, region.to_string()));
     }
     if let Some(account) = task_ref.account_id {
-        attrs.push(KeyValue::new(sc::CLOUD_ACCOUNT_ID, account.to_string()));
+        attrs.push(KeyValue::new(attr::CLOUD_ACCOUNT_ID, account.to_string()));
     }
     if !task.availability_zone.is_empty() {
         attrs.push(KeyValue::new(
-            sc::CLOUD_AVAILABILITY_ZONE,
+            attr::CLOUD_AVAILABILITY_ZONE,
             task.availability_zone.clone(),
         ));
     }
 
     attrs.push(KeyValue::new(
-        "aws.ecs.cluster.arn",
+        attr::AWS_ECS_CLUSTER_ARN,
         qualify(&task.cluster, "cluster", task_ref),
     ));
     attrs.push(KeyValue::new(
-        "aws.ecs.launchtype",
+        attr::AWS_ECS_LAUNCHTYPE,
         task.launch_type.to_lowercase(),
     ));
-    attrs.push(KeyValue::new("aws.ecs.task.arn", task.task_arn.clone()));
-    attrs.push(KeyValue::new("aws.ecs.task.family", task.family.clone()));
+    attrs.push(KeyValue::new(attr::AWS_ECS_TASK_ARN, task.task_arn.clone()));
     attrs.push(KeyValue::new(
-        "aws.ecs.task.revision",
+        attr::AWS_ECS_TASK_FAMILY,
+        task.family.clone(),
+    ));
+    attrs.push(KeyValue::new(
+        attr::AWS_ECS_TASK_REVISION,
         task.revision.clone(),
     ));
 
@@ -235,8 +257,11 @@ fn container_attributes(container: &ContainerMetadataV4, task_ref: &NaiveArn) ->
         attrs.extend(log_attributes(options, container_ref.as_ref(), task_ref));
     }
 
-    attrs.push(KeyValue::new(sc::CLOUD_RESOURCE_ID, container_arn.clone()));
-    attrs.push(KeyValue::new("aws.ecs.container.arn", container_arn));
+    attrs.push(KeyValue::new(
+        attr::CLOUD_RESOURCE_ID,
+        container_arn.clone(),
+    ));
+    attrs.push(KeyValue::new(attr::AWS_ECS_CONTAINER_ARN, container_arn));
 
     attrs
 }
@@ -271,14 +296,14 @@ fn log_attributes(
     let stream = &options.stream;
 
     vec![
-        KeyValue::new("aws.log.group.names", group.clone()),
+        KeyValue::new(attr::AWS_LOG_GROUP_NAMES, group.clone()),
         KeyValue::new(
-            "aws.log.group.arns",
+            attr::AWS_LOG_GROUP_ARNS,
             format!("arn:{partition}:logs:{region}:{account}:log-group:{group}:*"),
         ),
-        KeyValue::new("aws.log.stream.names", stream.clone()),
+        KeyValue::new(attr::AWS_LOG_STREAM_NAMES, stream.clone()),
         KeyValue::new(
-            "aws.log.stream.arns",
+            attr::AWS_LOG_STREAM_ARNS,
             format!(
                 "arn:{partition}:logs:{region}:{account}:log-group:{group}:log-stream:{stream}"
             ),
@@ -343,11 +368,13 @@ mod tests {
 
     #[test]
     fn detected_resource_does_not_include_default_service_name() {
-        let resource =
-            EcsResourceDetector::detected_resource(vec![KeyValue::new(sc::CLOUD_PROVIDER, "aws")]);
+        let resource = EcsResourceDetector::detected_resource(vec![KeyValue::new(
+            attr::CLOUD_PROVIDER,
+            "aws",
+        )]);
 
         assert_eq!(
-            resource.get(&Key::new(sc::CLOUD_PROVIDER)),
+            resource.get(&Key::new(attr::CLOUD_PROVIDER)),
             Some("aws".into())
         );
         assert_eq!(resource.get(&Key::new("service.name")), None);
@@ -369,12 +396,12 @@ mod tests {
         let task_ref = NaiveArn::parse(&task.task_arn).expect("the task ARN parses");
         let attrs = task_attributes(&task, &task_ref);
 
-        assert_attribute(&attrs, sc::CLOUD_REGION, "us-west-2");
-        assert_attribute(&attrs, sc::CLOUD_ACCOUNT_ID, "111122223333");
-        assert_attribute(&attrs, sc::CLOUD_AVAILABILITY_ZONE, "us-west-2d");
-        assert_attribute(&attrs, "aws.ecs.task.arn", TASK_ARN);
-        assert_attribute(&attrs, "aws.ecs.task.family", "curltest");
-        assert_attribute(&attrs, "aws.ecs.task.revision", "26");
+        assert_attribute(&attrs, attr::CLOUD_REGION, "us-west-2");
+        assert_attribute(&attrs, attr::CLOUD_ACCOUNT_ID, "111122223333");
+        assert_attribute(&attrs, attr::CLOUD_AVAILABILITY_ZONE, "us-west-2d");
+        assert_attribute(&attrs, attr::AWS_ECS_TASK_ARN, TASK_ARN);
+        assert_attribute(&attrs, attr::AWS_ECS_TASK_FAMILY, "curltest");
+        assert_attribute(&attrs, attr::AWS_ECS_TASK_REVISION, "26");
     }
 
     #[test]
@@ -385,7 +412,7 @@ mod tests {
 
         assert_attribute(
             &attrs,
-            "aws.ecs.cluster.arn",
+            attr::AWS_ECS_CLUSTER_ARN,
             "arn:aws:ecs:us-west-2:111122223333:cluster/default",
         );
     }
@@ -396,7 +423,7 @@ mod tests {
         let task_ref = NaiveArn::parse(&task.task_arn).expect("the task ARN parses");
         let attrs = task_attributes(&task, &task_ref);
 
-        assert_attribute(&attrs, "aws.ecs.launchtype", "ec2");
+        assert_attribute(&attrs, attr::AWS_ECS_LAUNCHTYPE, "ec2");
     }
 
     #[test]
@@ -407,23 +434,23 @@ mod tests {
 
         let container_arn =
             "arn:aws:ecs:us-west-2:111122223333:container/acfcddf8-14b5-4d2a-9c1c-4b5e0ee2b8b4";
-        assert_attribute(&attrs, sc::CLOUD_RESOURCE_ID, container_arn);
-        assert_attribute(&attrs, "aws.ecs.container.arn", container_arn);
+        assert_attribute(&attrs, attr::CLOUD_RESOURCE_ID, container_arn);
+        assert_attribute(&attrs, attr::AWS_ECS_CONTAINER_ARN, container_arn);
 
-        assert_attribute(&attrs, "aws.log.group.names", "/ecs/metadata");
+        assert_attribute(&attrs, attr::AWS_LOG_GROUP_NAMES, "/ecs/metadata");
         assert_attribute(
             &attrs,
-            "aws.log.group.arns",
+            attr::AWS_LOG_GROUP_ARNS,
             "arn:aws:logs:us-west-2:111122223333:log-group:/ecs/metadata:*",
         );
         assert_attribute(
             &attrs,
-            "aws.log.stream.names",
+            attr::AWS_LOG_STREAM_NAMES,
             "ecs/curl/8f03e41243824aea923aca126495f665",
         );
         assert_attribute(
             &attrs,
-            "aws.log.stream.arns",
+            attr::AWS_LOG_STREAM_ARNS,
             "arn:aws:logs:us-west-2:111122223333:log-group:/ecs/metadata:log-stream:ecs/curl/8f03e41243824aea923aca126495f665",
         );
     }
@@ -437,8 +464,8 @@ mod tests {
         container.log_driver = "json-file".to_string();
         let attrs = container_attributes(&container, &task_ref);
 
-        assert_eq!(attribute(&attrs, "aws.log.group.names"), None);
-        assert_eq!(attribute(&attrs, "aws.log.stream.names"), None);
+        assert_eq!(attribute(&attrs, attr::AWS_LOG_GROUP_NAMES), None);
+        assert_eq!(attribute(&attrs, attr::AWS_LOG_STREAM_NAMES), None);
     }
 
     #[test]
@@ -458,7 +485,7 @@ mod tests {
 
         assert_attribute(
             &attrs,
-            "aws.log.group.arns",
+            attr::AWS_LOG_GROUP_ARNS,
             "arn:aws:logs:eu-central-1:111122223333:log-group:/ecs/metadata:*",
         );
     }
