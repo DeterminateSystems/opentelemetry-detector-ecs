@@ -8,7 +8,6 @@
     fenix.inputs.nixpkgs.follows = "nixpkgs";
   };
 
-  # The flake supplies the tools. The Justfile decides what to run with them.
   outputs =
     { nixpkgs, fenix, ... }:
     let
@@ -17,7 +16,6 @@
       systems = [
         "aarch64-darwin"
         "aarch64-linux"
-        "x86_64-darwin"
         "x86_64-linux"
       ];
 
