@@ -220,7 +220,7 @@ impl ResourceDetector for EcsResourceDetector {
 
         // ECS Anywhere runs the task on hardware the metadata endpoint says
         // nothing about, so the managed instance under it takes three API calls.
-        if task.launch_type == anywhere::EXTERNAL_LAUNCH_TYPE {
+        if anywhere::is_external(&task.launch_type) {
             attrs.extend(anywhere::attributes(
                 task_ref.region,
                 &task.cluster,

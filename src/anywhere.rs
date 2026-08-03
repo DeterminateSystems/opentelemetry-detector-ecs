@@ -25,7 +25,7 @@ use opentelemetry::KeyValue;
 use crate::attributes as attr;
 
 /// The launch type ECS reports for a task on the customer's own hardware.
-pub(crate) const EXTERNAL_LAUNCH_TYPE: &str = "EXTERNAL";
+const EXTERNAL_LAUNCH_TYPE: &str = "EXTERNAL";
 
 /// The error code every AWS service returns for a permission the caller lacks.
 const ACCESS_DENIED: &str = "AccessDeniedException";
@@ -54,6 +54,15 @@ impl Lookup {
             eprintln!("opentelemetry-detector-ecs: {notice}");
         }
     }
+}
+
+/// Whether a launch type puts the task on ECS Anywhere.
+///
+/// ECS spells the launch type in capitals and the semantic conventions spell it
+/// in lowercase, so the comparison ignores the difference rather than depend on
+/// which spelling reaches it.
+pub(crate) fn is_external(launch_type: &str) -> bool {
+    launch_type.eq_ignore_ascii_case(EXTERNAL_LAUNCH_TYPE)
 }
 
 /// Describes the managed instance the task runs on, blocking until it knows or
@@ -246,5 +255,174 @@ where
         format!("the task role cannot call {action}")
     } else {
         format!("{action} failed: {}", DisplayErrorContext(error))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use aws_sdk_ecs::config::Credentials;
+    use aws_sdk_ecs::config::retry::RetryConfig;
+    use aws_sdk_ecs::operation::describe_container_instances::DescribeContainerInstancesOutput;
+    use aws_sdk_ecs::operation::describe_tasks::DescribeTasksOutput;
+    use aws_smithy_mocks::{
+        MockResponseInterceptor, Rule, RuleMode, create_mock_http_client, mock,
+    };
+
+    use super::*;
+
+    const CLUSTER: &str = "default";
+    const TASK_ARN: &str =
+        "arn:aws:ecs:us-west-2:111122223333:task/default/158d1c8083dd49d6b527399fd6414f5c";
+    const CONTAINER_INSTANCE_ARN: &str = "arn:aws:ecs:us-west-2:111122223333:container-instance/default/cd2c1a51e1b34cd1a4a9c4e4b5f8b0d2";
+    const INSTANCE_ID: &str = "mi-0f7e1c9d3b5a8e2c4";
+
+    /// Builds a client that answers from the rules rather than the network.
+    ///
+    /// The `mock_client!` macro would do this, but it wants the SDK's
+    /// `test-util` feature, which pulls in a TLS stack a decade out of date.
+    macro_rules! client {
+        ($sdk:ident, $($rule:expr),+ $(,)?) => {{
+            let interceptor = MockResponseInterceptor::new().rule_mode(RuleMode::MatchAny);
+            $(let interceptor = interceptor.with_rule(&$rule);)+
+
+            $sdk::Client::from_conf(
+                $sdk::Config::builder()
+                    .behavior_version(BehaviorVersion::latest())
+                    .credentials_provider(Credentials::new("id", "secret", None, None, "tests"))
+                    .region(Region::new("us-west-2"))
+                    // Without this a denied call is denied three times over,
+                    // and the test waits out the backoff in between.
+                    .retry_config(RetryConfig::disabled())
+                    .http_client(create_mock_http_client())
+                    .interceptor(interceptor)
+                    .build(),
+            )
+        }};
+    }
+
+    /// A `DescribeTasks` that names the container instance holding the task.
+    fn describes_the_task() -> Rule {
+        mock!(aws_sdk_ecs::Client::describe_tasks)
+            .match_requests(|input| {
+                input.cluster() == Some(CLUSTER) && input.tasks() == [TASK_ARN.to_string()]
+            })
+            .then_output(|| {
+                DescribeTasksOutput::builder()
+                    .tasks(
+                        aws_sdk_ecs::types::Task::builder()
+                            .task_arn(TASK_ARN)
+                            .container_instance_arn(CONTAINER_INSTANCE_ARN)
+                            .build(),
+                    )
+                    .build()
+            })
+    }
+
+    /// A `DescribeContainerInstances` that names the managed instance under it.
+    fn describes_the_container_instance() -> Rule {
+        mock!(aws_sdk_ecs::Client::describe_container_instances)
+            .match_requests(|input| {
+                input.container_instances() == [CONTAINER_INSTANCE_ARN.to_string()]
+            })
+            .then_output(|| {
+                DescribeContainerInstancesOutput::builder()
+                    .container_instances(
+                        aws_sdk_ecs::types::ContainerInstance::builder()
+                            .container_instance_arn(CONTAINER_INSTANCE_ARN)
+                            .ec2_instance_id(INSTANCE_ID)
+                            .build(),
+                    )
+                    .build()
+            })
+    }
+
+    /// A `ListTagsForResource` returning the given tags on the managed instance.
+    fn lists_tags(tags: &'static [(&'static str, &'static str)]) -> Rule {
+        mock!(aws_sdk_ssm::Client::list_tags_for_resource)
+            .match_requests(|input| {
+                input.resource_id() == Some(INSTANCE_ID)
+                    && input.resource_type() == Some(&ResourceTypeForTagging::ManagedInstance)
+            })
+            .then_output(move || {
+                let list = tags.iter().map(|(key, value)| {
+                    aws_sdk_ssm::types::Tag::builder()
+                        .key(*key)
+                        .value(*value)
+                        .build()
+                        .expect("the tag has a key and a value")
+                });
+
+                aws_sdk_ssm::operation::list_tags_for_resource::ListTagsForResourceOutput::builder()
+                    .set_tag_list(Some(list.collect()))
+                    .build()
+            })
+    }
+
+    /// The attributes of a lookup, as key and value strings.
+    fn attributes_of(lookup: &Lookup) -> Vec<(String, String)> {
+        lookup
+            .attributes
+            .iter()
+            .map(|kv| (kv.key.to_string(), kv.value.to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn only_the_external_launch_type_is_ecs_anywhere() {
+        assert!(is_external("EXTERNAL"));
+        assert!(is_external("external"));
+
+        assert!(!is_external("EC2"));
+        assert!(!is_external("FARGATE"));
+        assert!(!is_external(""));
+    }
+
+    #[tokio::test]
+    async fn describes_the_managed_instance_and_its_tags() {
+        let ecs = client!(
+            aws_sdk_ecs,
+            describes_the_task(),
+            describes_the_container_instance()
+        );
+        let ssm = client!(
+            aws_sdk_ssm,
+            lists_tags(&[("Env", "production"), ("Rack", "b12")])
+        );
+
+        let lookup = managed_instance(&ecs, &ssm, CLUSTER, TASK_ARN).await;
+
+        assert_eq!(
+            attributes_of(&lookup),
+            [
+                (attr::HOST_ID.to_string(), INSTANCE_ID.to_string()),
+                (
+                    "aws.ecs.container_instance.tag.Env".to_string(),
+                    "production".to_string()
+                ),
+                (
+                    "aws.ecs.container_instance.tag.Rack".to_string(),
+                    "b12".to_string()
+                ),
+            ]
+        );
+        assert_eq!(lookup.notices, Vec::<String>::new());
+    }
+
+    #[tokio::test]
+    async fn describes_an_untagged_managed_instance() {
+        let ecs = client!(
+            aws_sdk_ecs,
+            describes_the_task(),
+            describes_the_container_instance()
+        );
+        let ssm = client!(aws_sdk_ssm, lists_tags(&[]));
+
+        let lookup = managed_instance(&ecs, &ssm, CLUSTER, TASK_ARN).await;
+
+        assert_eq!(
+            attributes_of(&lookup),
+            [(attr::HOST_ID.to_string(), INSTANCE_ID.to_string())]
+        );
+        assert_eq!(lookup.notices, Vec::<String>::new());
     }
 }
