@@ -6,24 +6,18 @@
 
     fenix.url = "https://flakehub.com/f/nix-community/fenix/*";
     fenix.inputs.nixpkgs.follows = "nixpkgs";
-
-    crane.url = "https://flakehub.com/f/ipetkov/crane/*";
   };
 
+  # The flake supplies the tools. The Justfile decides what to run with them.
   outputs =
-    {
-      self,
-      nixpkgs,
-      fenix,
-      crane,
-    }:
+    { nixpkgs, fenix, ... }:
     let
       inherit (nixpkgs) lib;
 
-      # The systems DeterminateCI maps to a runner by default.
       systems = [
         "aarch64-darwin"
         "aarch64-linux"
+        "x86_64-darwin"
         "x86_64-linux"
       ];
 
@@ -43,91 +37,13 @@
                 stable.rustc
                 stable.rustfmt
               ];
-
-            craneLib = (crane.mkLib pkgs).overrideToolchain toolchain;
-
-            # Crane keeps only the Rust sources by default, and the tests read
-            # their fixtures with `include_str!`.
-            src = lib.cleanSourceWith {
-              src = ./.;
-              filter = path: type: lib.hasSuffix ".json" path || craneLib.filterCargoSources path type;
-            };
-
-            common = {
-              inherit src;
-              strictDeps = true;
-            };
-
-            cargoArtifacts = craneLib.buildDepsOnly common;
           in
-          f {
-            inherit
-              pkgs
-              toolchain
-              craneLib
-              common
-              cargoArtifacts
-              ;
-          }
+          f { inherit pkgs toolchain; }
         );
     in
     {
-      checks = forEachSystem (
-        {
-          pkgs,
-          craneLib,
-          common,
-          cargoArtifacts,
-          ...
-        }:
-        {
-          build = craneLib.cargoBuild (common // { inherit cargoArtifacts; });
-
-          clippy = craneLib.cargoClippy (
-            common
-            // {
-              inherit cargoArtifacts;
-              cargoClippyExtraArgs = "--all-targets -- --deny warnings";
-            }
-          );
-
-          doc = craneLib.cargoDoc (
-            common
-            // {
-              inherit cargoArtifacts;
-              env.RUSTDOCFLAGS = "--deny warnings";
-            }
-          );
-
-          rustfmt = craneLib.cargoFmt { inherit (common) src; };
-
-          test = craneLib.cargoTest (common // { inherit cargoArtifacts; });
-
-          # These three read the whole tree, and each reports paths relative to
-          # the working directory, so run them from inside it.
-          editorconfig = pkgs.runCommand "check-editorconfig" { } ''
-            cd ${self}
-            ${lib.getExe pkgs.eclint} .
-            touch $out
-          '';
-
-          nixfmt = pkgs.runCommand "check-nixfmt" { } ''
-            cd ${self}
-            find . -name '*.nix' -print0 \
-              | xargs -0 ${lib.getExe pkgs.nixfmt} --check
-            touch $out
-          '';
-
-          typos = pkgs.runCommand "check-typos" { } ''
-            cd ${self}
-            ${lib.getExe pkgs.typos} .
-            touch $out
-          '';
-        }
-      );
-
       devShells = forEachSystem (
-        { pkgs, toolchain, ... }:
+        { pkgs, toolchain }:
         {
           default = pkgs.mkShell {
             name = "opentelemetry-detector-ecs";
