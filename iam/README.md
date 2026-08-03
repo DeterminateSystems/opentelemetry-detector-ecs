@@ -3,6 +3,7 @@
 [detector-policy.json](./detector-policy.json) grants a task role the three permissions the detector needs on ECS Anywhere, and nothing else.
 Attach it to the task role of every task that should report its managed instance.
 Substitute `<region>`, `<account-id>`, and `<cluster>` throughout; a cluster per policy keeps each one narrow.
+Every ARN names the `aws` partition as well, so a role in GovCloud or China wants `aws-us-gov` or `aws-cn` written in its place.
 
 The detector runs without the policy. Every permission it lacks costs the attributes behind it and leaves a notice on standard error.
 
