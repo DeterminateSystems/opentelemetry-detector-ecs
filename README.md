@@ -47,6 +47,12 @@ $ cargo test
 
 `nix flake check` runs everything CI runs: the tests, Clippy, rustdoc, and the formatting and spelling checks.
 
+## Releasing
+
+Raise the version in `Cargo.toml`, move the `Unreleased` heading in [CHANGELOG.md](./CHANGELOG.md) down to it, and tag the merged commit `v<version>`.
+Pushing the tag publishes the crate to crates.io and opens a GitHub release.
+The workflow refuses a tag that disagrees with the manifest.
+
 ## License
 
 Apache 2.0. See [LICENSE](./LICENSE).
