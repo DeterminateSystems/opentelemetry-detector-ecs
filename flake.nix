@@ -46,7 +46,12 @@
 
             craneLib = (crane.mkLib pkgs).overrideToolchain toolchain;
 
-            src = craneLib.cleanCargoSource ./.;
+            # Crane keeps only the Rust sources by default, and the tests read
+            # their fixtures with `include_str!`.
+            src = lib.cleanSourceWith {
+              src = ./.;
+              filter = path: type: lib.hasSuffix ".json" path || craneLib.filterCargoSources path type;
+            };
 
             common = {
               inherit src;
@@ -98,19 +103,24 @@
 
           test = craneLib.cargoTest (common // { inherit cargoArtifacts; });
 
+          # These three read the whole tree, and each reports paths relative to
+          # the working directory, so run them from inside it.
           editorconfig = pkgs.runCommand "check-editorconfig" { } ''
-            ${lib.getExe pkgs.eclint} ${self}
+            cd ${self}
+            ${lib.getExe pkgs.eclint} .
             touch $out
           '';
 
           nixfmt = pkgs.runCommand "check-nixfmt" { } ''
-            find ${self} -name '*.nix' -print0 \
+            cd ${self}
+            find . -name '*.nix' -print0 \
               | xargs -0 ${lib.getExe pkgs.nixfmt} --check
             touch $out
           '';
 
           typos = pkgs.runCommand "check-typos" { } ''
-            ${lib.getExe pkgs.typos} ${self}
+            cd ${self}
+            ${lib.getExe pkgs.typos} .
             touch $out
           '';
         }
