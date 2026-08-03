@@ -51,8 +51,17 @@ pub mod attributes {
         AWS_ECS_TASK_FAMILY, AWS_ECS_TASK_REVISION, AWS_LOG_GROUP_ARNS, AWS_LOG_GROUP_NAMES,
         AWS_LOG_STREAM_ARNS, AWS_LOG_STREAM_NAMES, CLOUD_ACCOUNT_ID, CLOUD_AVAILABILITY_ZONE,
         CLOUD_PLATFORM, CLOUD_PROVIDER, CLOUD_REGION, CLOUD_RESOURCE_ID, CONTAINER_ID,
-        CONTAINER_NAME,
+        CONTAINER_NAME, HOST_ID,
     };
+
+    /// The prefix the detector puts in front of a managed instance tag.
+    ///
+    /// A task on ECS Anywhere runs on a host the ECS agent registered as a
+    /// Systems Manager managed instance. The detector reports every tag on that
+    /// instance, naming a tag `Env` as `aws.ecs.container_instance.tag.Env`.
+    /// The semantic conventions name no such attribute, so the key is this
+    /// crate's own.
+    pub const AWS_ECS_CONTAINER_INSTANCE_TAG_PREFIX: &str = "aws.ecs.container_instance.tag.";
 }
 
 /// The environment variable ECS sets to the task metadata endpoint, version 4.
