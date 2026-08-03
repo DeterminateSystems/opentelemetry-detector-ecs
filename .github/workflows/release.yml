@@ -1,4 +1,4 @@
-name: Publish
+name: Release
 
 on:
   push:
@@ -8,14 +8,20 @@ permissions:
   contents: read
 
 jobs:
-  Publish:
+  # Checking, publishing, and announcing share a job, so the release does the
+  # setup once.
+  Release:
     runs-on: ubuntu-latest
 
     environment: crates.io
 
     permissions:
-      contents: read
-      id-token: write
+      contents: write # To open the GitHub release.
+      id-token: write # To trade for a crates.io token.
+
+    defaults:
+      run:
+        shell: nix develop --command bash -e {0}
 
     steps:
       - uses: actions/checkout@v6
@@ -23,44 +29,29 @@ jobs:
           persist-credentials: false
 
       - uses: DeterminateSystems/determinate-nix-action@main
-      - uses: DeterminateSystems/flakehub-cache-action@main
 
       - name: Check the tag against the manifest
         run: |
-          set -eu
-          manifest="$(nix develop --command cargo metadata --format-version 1 --no-deps \
-            | nix develop --command jq -r '.packages[0].version')"
+          manifest="$(cargo metadata --format-version 1 --no-deps | jq -r '.packages[0].version')"
           tag="${GITHUB_REF_NAME#v}"
           if [ "$manifest" != "$tag" ]; then
             echo "::error::tag $GITHUB_REF_NAME does not match the manifest version $manifest"
             exit 1
           fi
 
-      - name: Tests
-        run: nix develop --command cargo test --locked
+      - name: Check
+        run: just ci
 
       - uses: rust-lang/crates-io-auth-action@v1
         id: auth
 
       - name: Publish
-        run: nix develop --command cargo publish --locked
+        run: just publish
         env:
           CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
 
-  Release:
-    needs: Publish
-
-    runs-on: ubuntu-latest
-
-    permissions:
-      contents: write
-
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          persist-credentials: false
-
       - name: Announce the release
+        shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh release create "$GITHUB_REF_NAME" --verify-tag --generate-notes
