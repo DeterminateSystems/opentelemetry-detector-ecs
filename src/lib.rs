@@ -16,9 +16,23 @@
 //!
 //! Every key it reports is a public constant in [`attributes`].
 //!
+//! On ECS Anywhere it goes further. A task with the `EXTERNAL` launch type runs
+//! on a Systems Manager managed instance, so the detector asks ECS and Systems
+//! Manager for that instance's `mi-` ID and its tags, and reports them
+//! alongside the rest. See [`attributes::HOST_ID`] and
+//! [`attributes::SSM_MANAGED_INSTANCE_TAG_PREFIX`].
+//!
+//! That lookup wants three permissions on the task role —
+//! `ecs:DescribeTasks`, `ecs:DescribeContainerInstances`, and
+//! `ssm:ListTagsForResource` — and costs attributes rather than startup when
+//! it lacks one. The repository holds a Terraform module that grants them,
+//! under `examples/iam`.
+//!
 //! Detection blocks for up to two seconds while it queries the metadata
 //! endpoint, and it reports whatever it has gathered so far if the endpoint
-//! answers slowly, partially, or not at all.
+//! answers slowly, partially, or not at all. On ECS Anywhere it blocks for up
+//! to five seconds more, and prints a notice on standard error for each thing
+//! the credentials or their permissions keep it from learning.
 //!
 //! [conventions]: https://opentelemetry.io/docs/specs/semconv/resource/cloud-provider/aws/ecs/
 //
@@ -37,22 +51,37 @@ use opentelemetry_sdk::resource::{Resource, ResourceDetector};
 use regex::Regex;
 use serde::Deserialize;
 
+mod anywhere;
+
 use crate::attributes as attr;
 
 /// Every resource attribute key the detector reports.
 ///
-/// The keys come from [`opentelemetry_semantic_conventions`], which names them
-/// all, so a caller can match on what the detector produces without depending
-/// on that crate directly. The detector itself reads them from here, so the two
-/// lists cannot drift apart.
+/// Most of the keys come from [`opentelemetry_semantic_conventions`], which
+/// names them, so a caller can match on what the detector produces without
+/// depending on that crate directly. The detector itself reads them from here,
+/// so the two lists cannot drift apart. The semantic conventions name nothing
+/// for a managed instance, so the last two keys are the detector's own.
 pub mod attributes {
     pub use opentelemetry_semantic_conventions::resource::{
         AWS_ECS_CLUSTER_ARN, AWS_ECS_CONTAINER_ARN, AWS_ECS_LAUNCHTYPE, AWS_ECS_TASK_ARN,
         AWS_ECS_TASK_FAMILY, AWS_ECS_TASK_REVISION, AWS_LOG_GROUP_ARNS, AWS_LOG_GROUP_NAMES,
         AWS_LOG_STREAM_ARNS, AWS_LOG_STREAM_NAMES, CLOUD_ACCOUNT_ID, CLOUD_AVAILABILITY_ZONE,
         CLOUD_PLATFORM, CLOUD_PROVIDER, CLOUD_REGION, CLOUD_RESOURCE_ID, CONTAINER_ID,
-        CONTAINER_NAME,
+        CONTAINER_NAME, HOST_ID,
     };
+
+    /// The ARN of the ECS container instance running the task.
+    ///
+    /// The detector reports it only on ECS Anywhere.
+    pub const AWS_ECS_CONTAINER_INSTANCE_ARN: &str = "aws.ecs.container_instance.arn";
+
+    /// The prefix on every tag the detector copies from the Systems Manager
+    /// managed instance running the task: the tag `Role` arrives as
+    /// `aws.ssm.managed_instance.tag.Role`.
+    ///
+    /// The detector reports these only on ECS Anywhere.
+    pub const SSM_MANAGED_INSTANCE_TAG_PREFIX: &str = "aws.ssm.managed_instance.tag.";
 }
 
 /// The environment variable ECS sets to the task metadata endpoint, version 4.
@@ -106,7 +135,9 @@ struct LogOptions {
 /// The detector recognizes ECS by the `ECS_CONTAINER_METADATA_URI_V4` and
 /// `ECS_CONTAINER_METADATA_URI` environment variables. Given the v4 endpoint it
 /// reports the full set of attributes; given only v3 it reports the container
-/// name and ID; given neither it reports an empty [`Resource`].
+/// name and ID; given neither it reports an empty [`Resource`]. Given a task
+/// with the `EXTERNAL` launch type it also asks ECS and Systems Manager about
+/// the managed instance the task runs on.
 ///
 /// See the [crate documentation](crate) for an example.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -199,6 +230,17 @@ impl ResourceDetector for EcsResourceDetector {
 
         if let Some(container) = container {
             attrs.extend(container_attributes(&container, &task_ref));
+        }
+
+        // A task on ECS Anywhere runs on a managed instance whose ID and tags
+        // reach nothing but the ECS and Systems Manager APIs, so that lookup
+        // comes last, after everything the local endpoint can answer.
+        if anywhere::is_external(&task.launch_type) {
+            attrs.extend(anywhere::detect(
+                &qualify(&task.cluster, "cluster", &task_ref),
+                &task.task_arn,
+                task_ref.region,
+            ));
         }
 
         Self::detected_resource(attrs)
@@ -340,6 +382,9 @@ mod tests {
     const TASK_JSON: &str = include_str!("../tests/fixtures/task.json");
     const CONTAINER_JSON: &str = include_str!("../tests/fixtures/container.json");
 
+    /// The same, for a task on ECS Anywhere.
+    const EXTERNAL_TASK_JSON: &str = include_str!("../tests/fixtures/external-task.json");
+
     const TASK_ARN: &str =
         "arn:aws:ecs:us-west-2:111122223333:task/default/158d1c8083dd49d6b527399fd6414f5c";
 
@@ -424,6 +469,27 @@ mod tests {
         let attrs = task_attributes(&task, &task_ref);
 
         assert_attribute(&attrs, attr::AWS_ECS_LAUNCHTYPE, "ec2");
+    }
+
+    #[test]
+    fn task_attributes_of_an_external_task_omit_the_availability_zone() {
+        let task: TaskMetadataV4 =
+            serde_json::from_str(EXTERNAL_TASK_JSON).expect("the external task fixture parses");
+        let task_ref = NaiveArn::parse(&task.task_arn).expect("the task ARN parses");
+        let attrs = task_attributes(&task, &task_ref);
+
+        // ECS places a task on hardware it does not own, so it names no zone.
+        assert_attribute(&attrs, attr::AWS_ECS_LAUNCHTYPE, "external");
+        assert_eq!(attribute(&attrs, attr::CLOUD_AVAILABILITY_ZONE), None);
+    }
+
+    #[test]
+    fn the_external_launch_type_alone_means_ecs_anywhere() {
+        let external: TaskMetadataV4 =
+            serde_json::from_str(EXTERNAL_TASK_JSON).expect("the external task fixture parses");
+
+        assert!(anywhere::is_external(&external.launch_type));
+        assert!(!anywhere::is_external(&task().launch_type));
     }
 
     #[test]

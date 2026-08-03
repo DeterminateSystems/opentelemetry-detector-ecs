@@ -1,0 +1,12 @@
+{
+  "Cluster": "arn:aws:ecs:us-west-2:111122223333:cluster/anywhere",
+  "TaskARN": "arn:aws:ecs:us-west-2:111122223333:task/anywhere/158d1c8083dd49d6b527399fd6414f5c",
+  "Family": "curltest",
+  "Revision": "26",
+  "DesiredStatus": "RUNNING",
+  "KnownStatus": "RUNNING",
+  "PullStartedAt": "2020-10-02T00:43:06.202617438Z",
+  "PullStoppedAt": "2020-10-02T00:43:06.31288465Z",
+  "LaunchType": "EXTERNAL",
+  "Containers": []
+}
