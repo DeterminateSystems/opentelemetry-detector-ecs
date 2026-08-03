@@ -130,10 +130,14 @@ where
 
 /// Takes the credentials the environment supplies and asks the two services.
 async fn lookup(region: Option<&str>, cluster: &str, task_arn: &str) -> Lookup {
-    // The environment names the region on a well-configured host, but the task
-    // ARN names it too, and the cluster is wherever the ARN says it is.
-    let region = RegionProviderChain::default_provider()
-        .or_else(region.map(|region| Region::new(region.to_string())));
+    // The cluster is wherever the task ARN says it is, so the ARN goes first:
+    // it beats an `AWS_REGION` naming somewhere else, and it spares a host off
+    // in the customer's own rack the wait for an instance metadata endpoint
+    // that is not there. The environment answers for an ARN that named no
+    // region.
+    let region =
+        RegionProviderChain::first_try(region.map(|region| Region::new(region.to_string())))
+            .or_default_provider();
 
     let config = aws_config::defaults(BehaviorVersion::latest())
         .region(region)
