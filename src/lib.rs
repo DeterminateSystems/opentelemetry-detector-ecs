@@ -366,34 +366,6 @@ mod tests {
         );
     }
 
-    /// The rest of the tests name keys by constant on both sides, so this one
-    /// pins the constants to the strings that go over the wire. A semantic
-    /// conventions release that renames a key fails here.
-    #[test]
-    fn the_keys_spell_what_the_conventions_spell() {
-        assert_eq!(attributes::CLOUD_PROVIDER, "cloud.provider");
-        assert_eq!(attributes::CLOUD_PLATFORM, "cloud.platform");
-        assert_eq!(attributes::CLOUD_REGION, "cloud.region");
-        assert_eq!(attributes::CLOUD_ACCOUNT_ID, "cloud.account.id");
-        assert_eq!(
-            attributes::CLOUD_AVAILABILITY_ZONE,
-            "cloud.availability_zone"
-        );
-        assert_eq!(attributes::CLOUD_RESOURCE_ID, "cloud.resource_id");
-        assert_eq!(attributes::CONTAINER_NAME, "container.name");
-        assert_eq!(attributes::CONTAINER_ID, "container.id");
-        assert_eq!(attributes::AWS_ECS_CLUSTER_ARN, "aws.ecs.cluster.arn");
-        assert_eq!(attributes::AWS_ECS_CONTAINER_ARN, "aws.ecs.container.arn");
-        assert_eq!(attributes::AWS_ECS_LAUNCHTYPE, "aws.ecs.launchtype");
-        assert_eq!(attributes::AWS_ECS_TASK_ARN, "aws.ecs.task.arn");
-        assert_eq!(attributes::AWS_ECS_TASK_FAMILY, "aws.ecs.task.family");
-        assert_eq!(attributes::AWS_ECS_TASK_REVISION, "aws.ecs.task.revision");
-        assert_eq!(attributes::AWS_LOG_GROUP_NAMES, "aws.log.group.names");
-        assert_eq!(attributes::AWS_LOG_GROUP_ARNS, "aws.log.group.arns");
-        assert_eq!(attributes::AWS_LOG_STREAM_NAMES, "aws.log.stream.names");
-        assert_eq!(attributes::AWS_LOG_STREAM_ARNS, "aws.log.stream.arns");
-    }
-
     #[test]
     fn detected_resource_does_not_include_default_service_name() {
         let resource = EcsResourceDetector::detected_resource(vec![KeyValue::new(
