@@ -16,9 +16,13 @@
 //!
 //! Every key it reports is a public constant in [`attributes`].
 //!
+//! On ECS Anywhere it also reports the Systems Manager managed instance the
+//! task runs on, which costs three API calls and the permissions to make them.
+//! See [`EcsResourceDetector`] for what those are.
+//!
 //! Detection blocks for up to two seconds while it queries the metadata
-//! endpoint, and it reports whatever it has gathered so far if the endpoint
-//! answers slowly, partially, or not at all.
+//! endpoint, and five more on ECS Anywhere. It reports whatever it has gathered
+//! so far if the endpoint or the APIs answer slowly, partially, or not at all.
 //!
 //! [conventions]: https://opentelemetry.io/docs/specs/semconv/resource/cloud-provider/aws/ecs/
 //
@@ -38,6 +42,8 @@ use regex::Regex;
 use serde::Deserialize;
 
 use crate::attributes as attr;
+
+mod anywhere;
 
 /// Every resource attribute key the detector reports.
 ///
@@ -116,6 +122,18 @@ struct LogOptions {
 /// `ECS_CONTAINER_METADATA_URI` environment variables. Given the v4 endpoint it
 /// reports the full set of attributes; given only v3 it reports the container
 /// name and ID; given neither it reports an empty [`Resource`].
+///
+/// A task whose launch type is `EXTERNAL` runs on ECS Anywhere, and the
+/// detector goes on to name the Systems Manager managed instance underneath it.
+/// That takes the credentials the environment supplies and three permissions on
+/// the task role:
+///
+/// - `ecs:DescribeTasks`
+/// - `ecs:DescribeContainerInstances`
+/// - `ssm:ListTagsForResource`
+///
+/// Each one the role lacks costs the attributes behind it and leaves a notice
+/// on standard error. Detection succeeds regardless.
 ///
 /// See the [crate documentation](crate) for an example.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -199,6 +217,16 @@ impl ResourceDetector for EcsResourceDetector {
         };
 
         attrs.extend(task_attributes(&task, &task_ref));
+
+        // ECS Anywhere runs the task on hardware the metadata endpoint says
+        // nothing about, so the managed instance under it takes three API calls.
+        if task.launch_type == anywhere::EXTERNAL_LAUNCH_TYPE {
+            attrs.extend(anywhere::attributes(
+                task_ref.region,
+                &task.cluster,
+                &task.task_arn,
+            ));
+        }
 
         let container: Option<ContainerMetadataV4> = client
             .get(&uri)
