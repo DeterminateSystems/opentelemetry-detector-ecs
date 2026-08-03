@@ -140,6 +140,7 @@
               pkgs.cargo-outdated
               pkgs.eclint
               pkgs.jq
+              pkgs.just
               pkgs.nixfmt
               pkgs.rust-analyzer
               pkgs.typos
