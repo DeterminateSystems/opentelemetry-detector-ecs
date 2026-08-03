@@ -5,6 +5,8 @@ on:
   merge_group:
   push:
     branches: [main]
+    # DeterminateCI publishes the flake to FlakeHub from `main` and from tags.
+    tags: ["v[0-9]+.[0-9]+.[0-9]+*"]
   workflow_dispatch:
 
 concurrency:
