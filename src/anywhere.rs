@@ -71,41 +71,61 @@ pub(crate) fn is_external(launch_type: &str) -> bool {
 /// The lookup gets a thread and a runtime of its own, so a caller already
 /// inside Tokio can block on it without nesting one runtime in another.
 pub(crate) fn attributes(region: Option<&str>, cluster: &str, task_arn: &str) -> Vec<KeyValue> {
-    let lookup = std::thread::scope(|scope| {
-        scope
-            .spawn(|| {
-                let runtime = tokio::runtime::Builder::new_current_thread()
-                    .enable_all()
-                    .build();
+    let region = region.map(ToString::to_string);
+    let cluster = cluster.to_string();
+    let task_arn = task_arn.to_string();
 
-                let runtime = match runtime {
-                    Ok(runtime) => runtime,
-                    Err(error) => {
-                        let mut lookup = Lookup::default();
-                        lookup.note(format!("could not start a runtime: {error}"));
-                        return lookup;
-                    }
-                };
-
-                runtime.block_on(async {
-                    let deadline =
-                        tokio::time::timeout(LOOKUP_TIMEOUT, lookup(region, cluster, task_arn));
-                    deadline.await.unwrap_or_else(|_| {
-                        let mut lookup = Lookup::default();
-                        lookup.note(format!(
-                            "gave up on the managed instance after {} seconds",
-                            LOOKUP_TIMEOUT.as_secs()
-                        ));
-                        lookup
-                    })
-                })
-            })
-            .join()
-            .unwrap_or_default()
+    let lookup = detached(LOOKUP_TIMEOUT, async move {
+        lookup(region.as_deref(), &cluster, &task_arn).await
     });
 
     lookup.print_notices();
     lookup.attributes
+}
+
+/// Runs a lookup on a thread and a runtime of its own, and waits for it.
+///
+/// The thread is what lets a caller already inside Tokio block on the result,
+/// since a runtime cannot nest inside another. It also keeps whatever goes
+/// wrong on that side of the boundary: a lookup that overruns the deadline or
+/// panics outright costs the attributes it would have found and no more.
+fn detached<F>(deadline: Duration, lookup: F) -> Lookup
+where
+    F: Future<Output = Lookup> + Send + 'static,
+{
+    let worker = std::thread::spawn(move || {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build();
+
+        let runtime = match runtime {
+            Ok(runtime) => runtime,
+            Err(error) => {
+                let mut lookup = Lookup::default();
+                lookup.note(format!("could not start a runtime: {error}"));
+                return lookup;
+            }
+        };
+
+        runtime.block_on(async move {
+            tokio::time::timeout(deadline, lookup)
+                .await
+                .unwrap_or_else(|_| {
+                    let mut lookup = Lookup::default();
+                    lookup.note(format!(
+                        "gave up on the managed instance after {} seconds",
+                        deadline.as_secs()
+                    ));
+                    lookup
+                })
+        })
+    });
+
+    worker.join().unwrap_or_else(|_| {
+        let mut lookup = Lookup::default();
+        lookup.note("the managed instance lookup panicked".to_string());
+        lookup
+    })
 }
 
 /// Takes the credentials the environment supplies and asks the two services.
@@ -634,5 +654,44 @@ mod tests {
             notice.starts_with("ssm:ListTagsForResource failed: "),
             "notice {notice:?}"
         );
+    }
+
+    /// A lookup that found one attribute and had nothing to complain about.
+    fn found() -> Lookup {
+        Lookup {
+            attributes: vec![KeyValue::new(attr::HOST_ID, INSTANCE_ID)],
+            notices: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn detached_runs_outside_a_runtime() {
+        assert_eq!(detached(LOOKUP_TIMEOUT, async { found() }), found());
+    }
+
+    #[tokio::test]
+    async fn detached_runs_inside_a_runtime() {
+        // A runtime cannot nest inside another, so a caller that already has
+        // one would panic here if the lookup did not get a thread of its own.
+        assert_eq!(detached(LOOKUP_TIMEOUT, async { found() }), found());
+    }
+
+    #[test]
+    fn detached_gives_up_at_the_deadline() {
+        let lookup = detached(Duration::ZERO, std::future::pending());
+
+        assert_eq!(lookup.attributes, []);
+        assert_eq!(
+            lookup.notices,
+            ["gave up on the managed instance after 0 seconds"]
+        );
+    }
+
+    #[test]
+    fn detached_survives_a_panic() {
+        let lookup = detached(LOOKUP_TIMEOUT, async { panic!("the lookup gave out") });
+
+        assert_eq!(lookup.attributes, []);
+        assert_eq!(lookup.notices, ["the managed instance lookup panicked"]);
     }
 }
