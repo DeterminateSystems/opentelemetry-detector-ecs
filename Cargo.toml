@@ -16,32 +16,48 @@ categories = ["development-tools::debugging", "development-tools::profiling"]
 ignored = ["aws-smithy-http-client"]
 
 [features]
+default = ["anywhere"]
+
+# Name the Systems Manager managed instance under a task on ECS Anywhere,
+# which is where the AWS SDK clients and the tokio runtime they want come
+# from. Turning it off leaves the metadata-endpoint attributes and drops
+# those dependencies.
+anywhere = [
+  "dep:aws-config",
+  "dep:aws-sdk-ecs",
+  "dep:aws-sdk-ssm",
+  "dep:aws-smithy-http-client",
+  "dep:tokio",
+]
+
 # Serve every HTTPS request with FIPS-validated crypto. The feature swaps the
 # SDK clients' TLS stack onto aws-lc-fips-sys, and because Cargo builds one
 # aws-lc-rs for the whole binary, every aws-lc caller gets the FIPS module.
-# Building it takes cmake, go, and perl, plus clang on Linux.
-fips = ["aws-smithy-http-client/rustls-aws-lc-fips"]
+# Building it takes cmake, go, and perl, plus clang on Linux. Without
+# `anywhere` nothing makes an HTTPS request, so the forward is weak and the
+# combination compiles no crypto at all.
+fips = ["aws-smithy-http-client?/rustls-aws-lc-fips"]
 
 [dependencies]
 arn = "0.1.0"
-aws-config = { version = "1.10.1", default-features = false, features = [
+aws-config = { version = "1.10.1", optional = true, default-features = false, features = [
   "behavior-version-latest",
   "default-https-client",
   "rt-tokio",
 ] }
 # The SDK's default `rustls` feature selects a TLS stack a decade out of date,
 # so each client takes `default-https-client` and nothing else.
-aws-sdk-ecs = { version = "1.136.0", default-features = false, features = [
+aws-sdk-ecs = { version = "1.136.0", optional = true, default-features = false, features = [
   "default-https-client",
   "rt-tokio",
 ] }
-aws-sdk-ssm = { version = "1.118.0", default-features = false, features = [
+aws-sdk-ssm = { version = "1.118.0", optional = true, default-features = false, features = [
   "default-https-client",
   "rt-tokio",
 ] }
 # Named only so the `fips` feature can reach it; the SDK clients above already
 # pull it in through `default-https-client`.
-aws-smithy-http-client = { version = "1.2.0" }
+aws-smithy-http-client = { version = "1.2.0", optional = true }
 opentelemetry = { version = "0.32.0", default-features = false }
 opentelemetry-semantic-conventions = { version = "0.32.1", features = [
   "semconv_experimental",
@@ -54,7 +70,7 @@ reqwest = { version = "0.13.4", features = [
 ], default-features = false }
 serde = { version = "1.0.229", default-features = false, features = ["derive"] }
 serde_json = "1.0.150"
-tokio = { version = "1.49.0", default-features = false, features = [
+tokio = { version = "1.49.0", optional = true, default-features = false, features = [
   "rt",
   "time",
 ] }
