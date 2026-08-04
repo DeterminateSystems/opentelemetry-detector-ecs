@@ -74,9 +74,15 @@
 
       # Build the crate and run its tests on FIPS-validated crypto, so
       # `nix build .#checks.x86_64-linux.fips` (or aarch64-linux) exercises
-      # a Linux build from any machine with a Linux builder.
-      checks = forEachSystem (
-        { pkgs, ... }:
+      # a Linux build from any machine with a Linux builder. Only the Linux
+      # systems: AWS-LC supports its static FIPS build nowhere else, and the
+      # macOS shared build wants a codesign the sandbox lacks. A macOS
+      # working copy still runs `just test-fips` in the dev shell.
+      checks = lib.genAttrs (lib.filter (lib.hasSuffix "-linux") systems) (
+        system:
+        let
+          pkgs = nixpkgs.legacyPackages.${system};
+        in
         {
           fips = pkgs.rustPlatform.buildRustPackage.override { stdenv = pkgs.clangStdenv; } {
             pname = "opentelemetry-detector-ecs-fips";
@@ -96,9 +102,16 @@
 
             buildFeatures = [ "fips" ];
 
-            # The default build makes a dylib and codesigns it on macOS, and
-            # the sandbox has no codesign; the static library needs neither.
+            # The static library, so the tests need no shared-object path.
             AWS_LC_FIPS_SYS_STATIC = "1";
+
+            # nixpkgs' cargo hooks export HOST_CC/HOST_CXX naming the build
+            # platform's gcc, and on a native build AWS-LC's build script
+            # prefers those over the clang stdenv's CC. Its x86_64 delocator
+            # accepts only clang's assembly, so name clang through the
+            # crate-specific variables that outrank the hooks'.
+            AWS_LC_FIPS_SYS_HOST_CC = "clang";
+            AWS_LC_FIPS_SYS_HOST_CXX = "clang++";
 
             nativeBuildInputs = [
               # aws-lc-fips-sys builds AWS-LC's FIPS module from source.
