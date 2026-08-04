@@ -43,11 +43,18 @@
       devShells = forEachSystem (
         { pkgs, toolchain }:
         {
-          default = pkgs.mkShell {
+          # A clang stdenv because that is what aws-lc-fips-sys's build, behind
+          # the `fips` feature, is tested against.
+          default = pkgs.mkShell.override { stdenv = pkgs.clangStdenv; } {
             name = "opentelemetry-detector-ecs";
 
             packages = [
               toolchain
+
+              # The `fips` feature builds AWS-LC's FIPS module from source.
+              pkgs.cmake
+              pkgs.go
+              pkgs.perl
 
               pkgs.cargo-audit
               pkgs.cargo-machete
