@@ -65,6 +65,17 @@ opentelemetry-detector-ecs: the task role cannot call ssm:ListTagsForResource
 Detection succeeds regardless, so a role short of `ssm:ListTagsForResource` still reports `host.id`.
 A task on any other launch type skips the three calls altogether.
 
+## FIPS
+
+The `fips` feature serves the detector's AWS calls with FIPS-validated crypto:
+
+```toml
+opentelemetry-detector-ecs = { version = "0.1.0", features = ["fips"] }
+```
+
+The feature puts the SDK clients' TLS stack on [`aws-lc-fips-sys`](https://crates.io/crates/aws-lc-fips-sys), and because Cargo builds one `aws-lc-rs` for the whole binary, every other `aws-lc` caller in the program gets the FIPS module too.
+Compiling it builds AWS-LC's FIPS module from source, which takes cmake, Go, and Perl.
+
 ## Development
 
 ```console
