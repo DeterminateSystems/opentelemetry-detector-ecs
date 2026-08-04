@@ -16,9 +16,13 @@
 //!
 //! Every key it reports is a public constant in [`attributes`].
 //!
+//! On ECS Anywhere it also reports the Systems Manager managed instance the
+//! task runs on, which costs three API calls and the permissions to make them.
+//! See [`EcsResourceDetector`] for what those are.
+//!
 //! Detection blocks for up to two seconds while it queries the metadata
-//! endpoint, and it reports whatever it has gathered so far if the endpoint
-//! answers slowly, partially, or not at all.
+//! endpoint, and five more on ECS Anywhere. It reports whatever it has gathered
+//! so far if the endpoint or the APIs answer slowly, partially, or not at all.
 //!
 //! [conventions]: https://opentelemetry.io/docs/specs/semconv/resource/cloud-provider/aws/ecs/
 //
@@ -39,6 +43,8 @@ use serde::Deserialize;
 
 use crate::attributes as attr;
 
+mod anywhere;
+
 /// Every resource attribute key the detector reports.
 ///
 /// The keys come from [`opentelemetry_semantic_conventions`], which names them
@@ -51,8 +57,17 @@ pub mod attributes {
         AWS_ECS_TASK_FAMILY, AWS_ECS_TASK_REVISION, AWS_LOG_GROUP_ARNS, AWS_LOG_GROUP_NAMES,
         AWS_LOG_STREAM_ARNS, AWS_LOG_STREAM_NAMES, CLOUD_ACCOUNT_ID, CLOUD_AVAILABILITY_ZONE,
         CLOUD_PLATFORM, CLOUD_PROVIDER, CLOUD_REGION, CLOUD_RESOURCE_ID, CONTAINER_ID,
-        CONTAINER_NAME,
+        CONTAINER_NAME, HOST_ID,
     };
+
+    /// The prefix the detector puts in front of a managed instance tag.
+    ///
+    /// A task on ECS Anywhere runs on a host the ECS agent registered as a
+    /// Systems Manager managed instance. The detector reports every tag on that
+    /// instance, naming a tag `Env` as `aws.ecs.container_instance.tag.Env`.
+    /// The semantic conventions name no such attribute, so the key is this
+    /// crate's own.
+    pub const AWS_ECS_CONTAINER_INSTANCE_TAG_PREFIX: &str = "aws.ecs.container_instance.tag.";
 }
 
 /// The environment variable ECS sets to the task metadata endpoint, version 4.
@@ -107,6 +122,18 @@ struct LogOptions {
 /// `ECS_CONTAINER_METADATA_URI` environment variables. Given the v4 endpoint it
 /// reports the full set of attributes; given only v3 it reports the container
 /// name and ID; given neither it reports an empty [`Resource`].
+///
+/// A task whose launch type is `EXTERNAL` runs on ECS Anywhere, and the
+/// detector goes on to name the Systems Manager managed instance underneath it.
+/// That takes the credentials the environment supplies and three permissions on
+/// the task role:
+///
+/// - `ecs:DescribeTasks`
+/// - `ecs:DescribeContainerInstances`
+/// - `ssm:ListTagsForResource`
+///
+/// Each one the role lacks costs the attributes behind it and leaves a notice
+/// on standard error. Detection succeeds regardless.
 ///
 /// See the [crate documentation](crate) for an example.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -190,6 +217,16 @@ impl ResourceDetector for EcsResourceDetector {
         };
 
         attrs.extend(task_attributes(&task, &task_ref));
+
+        // ECS Anywhere runs the task on hardware the metadata endpoint says
+        // nothing about, so the managed instance under it takes three API calls.
+        if anywhere::is_external(&task.launch_type) {
+            attrs.extend(anywhere::attributes(
+                task_ref.region,
+                &task.cluster,
+                &task.task_arn,
+            ));
+        }
 
         let container: Option<ContainerMetadataV4> = client
             .get(&uri)

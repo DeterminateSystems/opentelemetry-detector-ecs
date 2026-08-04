@@ -1,0 +1,48 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "ReadTheTaskAndTheContainerInstanceHoldingIt",
+      "Effect": "Allow",
+      "Action": [
+        "ecs:DescribeTasks",
+        "ecs:DescribeContainerInstances"
+      ],
+      "Resource": [
+        "arn:aws:ecs:<region>:<account-id>:task/<cluster>/*",
+        "arn:aws:ecs:<region>:<account-id>:container-instance/<cluster>/*"
+      ],
+      "Condition": {
+        "ArnEquals": {
+          "ecs:cluster": "arn:aws:ecs:<region>:<account-id>:cluster/<cluster>"
+        }
+      }
+    },
+    {
+      "Sid": "DenyBothCallsAgainstAnyOtherCluster",
+      "Effect": "Deny",
+      "Action": [
+        "ecs:DescribeTasks",
+        "ecs:DescribeContainerInstances"
+      ],
+      "Resource": "*",
+      "Condition": {
+        "ArnNotEquals": {
+          "ecs:cluster": "arn:aws:ecs:<region>:<account-id>:cluster/<cluster>"
+        }
+      }
+    },
+    {
+      "Sid": "ReadTheTagsOnAManagedInstance",
+      "Effect": "Allow",
+      "Action": "ssm:ListTagsForResource",
+      "Resource": "arn:aws:ssm:<region>:<account-id>:managed-instance/mi-*"
+    },
+    {
+      "Sid": "DenyThatCallAgainstAnyOtherResource",
+      "Effect": "Deny",
+      "Action": "ssm:ListTagsForResource",
+      "NotResource": "arn:aws:ssm:<region>:<account-id>:managed-instance/mi-*"
+    }
+  ]
+}
