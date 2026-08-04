@@ -76,6 +76,14 @@ jobs:
         if: success() || failure()
         run: just test
 
+      - name: Clippy (without ECS Anywhere)
+        if: success() || failure()
+        run: just clippy-lean
+
+      - name: Tests (without ECS Anywhere)
+        if: success() || failure()
+        run: just test-lean
+
       - name: Documentation
         if: success() || failure()
         run: just doc
