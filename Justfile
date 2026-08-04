@@ -5,7 +5,7 @@ default:
     @just --list
 
 # Run every check CI runs.
-ci: fmt-check nixfmt-check editorconfig spelling clippy test doc unused audit package
+ci: fmt-check nixfmt-check editorconfig spelling clippy test doc unused audit package clippy-fips test-fips
 
 # Format the Rust and Nix sources in place.
 fmt:
@@ -35,6 +35,14 @@ clippy:
 # Run the tests.
 test:
     cargo test --locked
+
+# Lint the FIPS build with Clippy.
+clippy-fips:
+    cargo clippy --all-targets --locked --features fips -- --deny warnings
+
+# Run the tests on FIPS-validated crypto.
+test-fips:
+    cargo test --locked --features fips
 
 # Build the documentation.
 doc:
