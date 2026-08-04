@@ -72,6 +72,48 @@
         }
       );
 
+      # Build the crate and run its tests on FIPS-validated crypto, so
+      # `nix build .#checks.x86_64-linux.fips` (or aarch64-linux) exercises
+      # a Linux build from any machine with a Linux builder.
+      checks = forEachSystem (
+        { pkgs, ... }:
+        {
+          fips = pkgs.rustPlatform.buildRustPackage.override { stdenv = pkgs.clangStdenv; } {
+            pname = "opentelemetry-detector-ecs-fips";
+            version = (lib.importTOML ./Cargo.toml).package.version;
+
+            src = lib.fileset.toSource {
+              root = ./.;
+              fileset = lib.fileset.unions [
+                ./Cargo.toml
+                ./Cargo.lock
+                ./src
+                ./tests
+              ];
+            };
+
+            cargoLock.lockFile = ./Cargo.lock;
+
+            buildFeatures = [ "fips" ];
+
+            # The default build makes a dylib and codesigns it on macOS, and
+            # the sandbox has no codesign; the static library needs neither.
+            AWS_LC_FIPS_SYS_STATIC = "1";
+
+            nativeBuildInputs = [
+              # aws-lc-fips-sys builds AWS-LC's FIPS module from source.
+              pkgs.cmake
+              pkgs.go
+              pkgs.perl
+            ];
+
+            # cmake is above only for aws-lc-fips-sys's build script; the
+            # crate itself configures with cargo.
+            dontUseCmakeConfigure = true;
+          };
+        }
+      );
+
       formatter = forEachSystem ({ pkgs, ... }: pkgs.nixfmt);
     };
 }
