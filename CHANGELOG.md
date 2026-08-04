@@ -2,7 +2,7 @@
 
 This project follows [Semantic Versioning](https://semver.org/).
 
-## Unreleased
+## 0.2.0
 
 - Offer a `fips` feature that serves the detector's AWS calls with
   FIPS-validated crypto, by building the SDK clients' TLS stack on
