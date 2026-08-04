@@ -18,7 +18,9 @@
 //!
 //! On ECS Anywhere it also reports the Systems Manager managed instance the
 //! task runs on, which costs three API calls and the permissions to make them.
-//! See [`EcsResourceDetector`] for what those are.
+//! See [`EcsResourceDetector`] for what those are. The `anywhere` cargo
+//! feature, on by default, carries that lookup; turning it off drops the
+//! lookup and the AWS SDK dependencies behind it.
 //!
 //! Detection blocks for up to two seconds while it queries the metadata
 //! endpoint, and five more on ECS Anywhere. It reports whatever it has gathered
@@ -43,6 +45,7 @@ use serde::Deserialize;
 
 use crate::attributes as attr;
 
+#[cfg(feature = "anywhere")]
 mod anywhere;
 
 /// Every resource attribute key the detector reports.
@@ -133,7 +136,8 @@ struct LogOptions {
 /// - `ssm:ListTagsForResource`
 ///
 /// Each one the role lacks costs the attributes behind it and leaves a notice
-/// on standard error. Detection succeeds regardless.
+/// on standard error. Detection succeeds regardless. The lookup exists under
+/// the `anywhere` cargo feature, which is on by default.
 ///
 /// See the [crate documentation](crate) for an example.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -220,6 +224,7 @@ impl ResourceDetector for EcsResourceDetector {
 
         // ECS Anywhere runs the task on hardware the metadata endpoint says
         // nothing about, so the managed instance under it takes three API calls.
+        #[cfg(feature = "anywhere")]
         if anywhere::is_external(&task.launch_type) {
             attrs.extend(anywhere::attributes(
                 task_ref.region,

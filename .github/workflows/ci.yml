@@ -76,6 +76,14 @@ jobs:
         if: success() || failure()
         run: just test
 
+      - name: Clippy (without ECS Anywhere)
+        if: success() || failure()
+        run: just clippy-lean
+
+      - name: Tests (without ECS Anywhere)
+        if: success() || failure()
+        run: just test-lean
+
       - name: Documentation
         if: success() || failure()
         run: just doc
@@ -92,6 +100,15 @@ jobs:
       - name: Packaging
         if: success() || failure()
         run: just package
+
+      # Last because these compile AWS-LC's FIPS module from source.
+      - name: Clippy (FIPS)
+        if: success() || failure()
+        run: just clippy-fips
+
+      - name: Tests (FIPS)
+        if: success() || failure()
+        run: just test-fips
 
   FlakeLock:
     if: github.event_name == 'schedule'
