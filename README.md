@@ -69,7 +69,7 @@ The lookup lives under the `anywhere` cargo feature, which is on by default.
 Turning it off leaves the metadata-endpoint attributes and drops the AWS SDK dependencies:
 
 ```toml
-opentelemetry-detector-ecs = { version = "0.1.0", default-features = false }
+opentelemetry-detector-ecs = { version = "0.2.0", default-features = false }
 ```
 
 ## FIPS
@@ -77,7 +77,7 @@ opentelemetry-detector-ecs = { version = "0.1.0", default-features = false }
 The `fips` feature serves the detector's AWS calls with FIPS-validated crypto:
 
 ```toml
-opentelemetry-detector-ecs = { version = "0.1.0", features = ["fips"] }
+opentelemetry-detector-ecs = { version = "0.2.0", features = ["fips"] }
 ```
 
 The feature puts the SDK clients' TLS stack on [`aws-lc-fips-sys`](https://crates.io/crates/aws-lc-fips-sys), and because Cargo builds one `aws-lc-rs` for the whole binary, every other `aws-lc` caller in the program gets the FIPS module too.
