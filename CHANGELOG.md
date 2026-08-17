@@ -2,7 +2,7 @@
 
 This project follows [Semantic Versioning](https://semver.org/).
 
-## Unreleased
+## 0.3.0
 
 - Detect once. The first detection keeps what it found in memory, and every
   detection after it, from whatever thread, costs no more than a clone. A
