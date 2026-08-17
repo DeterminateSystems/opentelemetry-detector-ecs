@@ -23,6 +23,58 @@ let resource = Resource::builder()
 Detection blocks for up to two seconds while it queries the metadata endpoint, and five more on ECS Anywhere.
 It reports whatever it has gathered so far if the endpoint or the APIs answer slowly, partially, or not at all.
 
+It pays that cost once.
+The first detection keeps its answer in memory, and every detection after it, from whatever thread, costs no more than a clone.
+A program can therefore give the detector to as many providers as it has.
+The answer outlives the environment it came from, so a variable set or a tag changed afterwards goes unnoticed.
+
+## The detected task
+
+`EcsMetadata` is the same description in fields rather than in attributes, for a program that wants the task itself:
+
+```rust
+use opentelemetry_detector_ecs::EcsMetadata;
+
+if let Some(metadata) = EcsMetadata::detect() {
+    println!("{}", serde_json::to_string_pretty(metadata).expect("it serializes"));
+    println!("{:?}", metadata.task.as_ref().map(|task| &task.family));
+}
+```
+
+`EcsMetadata::detect` reports `None` off ECS and reads from the same cache the detector does.
+The type serializes and deserializes, and leaves out whatever the task does not have:
+
+```json
+{
+  "container": {
+    "name": "ip-10-0-0-1.us-west-2.compute.internal",
+    "id": "43481a6ce4842eec8fe72fc28500c6b52edcc0917f105b83379f88cac1ff3946",
+    "arn": "arn:aws:ecs:us-west-2:111122223333:container/acfcddf8-14b5-4d2a-9c1c-4b5e0ee2b8b4"
+  },
+  "cloud": {
+    "region": "us-west-2",
+    "account_id": "111122223333",
+    "availability_zone": "us-west-2d"
+  },
+  "task": {
+    "arn": "arn:aws:ecs:us-west-2:111122223333:task/default/158d1c8083dd49d6b527399fd6414f5c",
+    "cluster_arn": "arn:aws:ecs:us-west-2:111122223333:cluster/default",
+    "family": "curltest",
+    "revision": "26",
+    "launch_type": "EC2"
+  },
+  "logs": {
+    "group_name": "/ecs/metadata",
+    "group_arn": "arn:aws:logs:us-west-2:111122223333:log-group:/ecs/metadata:*",
+    "stream_name": "ecs/curl/8f03e41243824aea923aca126495f665",
+    "stream_arn": "arn:aws:logs:us-west-2:111122223333:log-group:/ecs/metadata:log-stream:ecs/curl/8f03e41243824aea923aca126495f665"
+  }
+}
+```
+
+`EcsMetadata::attributes` turns that into the table below, and `EcsMetadata::resource` into the resource the detector reports.
+`EcsMetadata::detect_uncached` reads it all again, at the cost `detect` pays only once.
+
 ## Attributes
 
 Every key below is a public constant in the crate's `attributes` module, re-exported from [`opentelemetry-semantic-conventions`](https://docs.rs/opentelemetry-semantic-conventions).
@@ -64,6 +116,7 @@ opentelemetry-detector-ecs: the task role cannot call ssm:ListTagsForResource
 
 Detection succeeds regardless, so a role short of `ssm:ListTagsForResource` still reports `host.id`.
 A task on any other launch type skips the three calls altogether.
+What the lookup found is the `managed_instance` field of `EcsMetadata`, which holds the `mi-` ID and the tags as a map.
 
 The lookup lives under the `anywhere` cargo feature, which is on by default.
 Turning it off leaves the metadata-endpoint attributes and drops the AWS SDK dependencies:
