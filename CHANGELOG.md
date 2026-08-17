@@ -2,6 +2,22 @@
 
 This project follows [Semantic Versioning](https://semver.org/).
 
+## 0.3.0
+
+- Detect once. The first detection keeps what it found in memory, and every
+  detection after it, from whatever thread, costs no more than a clone. A
+  program can therefore give the detector to as many providers as it has.
+  `EcsMetadata::detect_uncached` reads it all again for a program that expects
+  the answer to change.
+
+- Offer the detected task as `EcsMetadata`, a structure of fields rather than a
+  list of attributes, which serializes and deserializes for whatever wants the
+  description outside OpenTelemetry. `EcsMetadata::attributes` and
+  `EcsMetadata::resource` turn it into what the detector reports.
+
+- Leave out `aws.ecs.launchtype` when the metadata endpoint names no launch
+  type, rather than report it empty.
+
 ## 0.2.0
 
 - Offer a `fips` feature that serves the detector's AWS calls with

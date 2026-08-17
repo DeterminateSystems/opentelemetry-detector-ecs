@@ -13,6 +13,7 @@
 //! error naming the permission, since a detector answers to no logger of its
 //! own and a missing attribute is not worth failing a program over.
 
+use std::collections::BTreeMap;
 use std::time::Duration;
 
 use aws_config::BehaviorVersion;
@@ -20,12 +21,8 @@ use aws_config::meta::region::RegionProviderChain;
 use aws_sdk_ecs::config::Region;
 use aws_sdk_ecs::error::{DisplayErrorContext, ProvideErrorMetadata, SdkError};
 use aws_sdk_ssm::types::ResourceTypeForTagging;
-use opentelemetry::KeyValue;
 
-use crate::attributes as attr;
-
-/// The launch type ECS reports for a task on the customer's own hardware.
-const EXTERNAL_LAUNCH_TYPE: &str = "EXTERNAL";
+use crate::metadata::ManagedInstance;
 
 /// The error code every AWS service returns for a permission the caller lacks.
 const ACCESS_DENIED: &str = "AccessDeniedException";
@@ -38,7 +35,7 @@ const LOOKUP_TIMEOUT: Duration = Duration::from_secs(5);
 /// What a lookup learned, and what it could not.
 #[derive(Debug, Default, PartialEq)]
 struct Lookup {
-    attributes: Vec<KeyValue>,
+    instance: Option<ManagedInstance>,
     notices: Vec<String>,
 }
 
@@ -56,21 +53,16 @@ impl Lookup {
     }
 }
 
-/// Whether a launch type puts the task on ECS Anywhere.
-///
-/// ECS spells the launch type in capitals and the semantic conventions spell it
-/// in lowercase, so the comparison ignores the difference rather than depend on
-/// which spelling reaches it.
-pub(crate) fn is_external(launch_type: &str) -> bool {
-    launch_type.eq_ignore_ascii_case(EXTERNAL_LAUNCH_TYPE)
-}
-
 /// Describes the managed instance the task runs on, blocking until it knows or
 /// the deadline passes.
 ///
 /// The lookup gets a thread and a runtime of its own, so a caller already
 /// inside Tokio can block on it without nesting one runtime in another.
-pub(crate) fn attributes(region: Option<&str>, cluster: &str, task_arn: &str) -> Vec<KeyValue> {
+pub(crate) fn describe(
+    region: Option<&str>,
+    cluster: &str,
+    task_arn: &str,
+) -> Option<ManagedInstance> {
     let region = region.map(ToString::to_string);
     let cluster = cluster.to_string();
     let task_arn = task_arn.to_string();
@@ -80,7 +72,7 @@ pub(crate) fn attributes(region: Option<&str>, cluster: &str, task_arn: &str) ->
     });
 
     lookup.print_notices();
-    lookup.attributes
+    lookup.instance
 }
 
 /// Runs a lookup on a thread and a runtime of its own, and waits for it.
@@ -163,14 +155,14 @@ async fn managed_instance(
         return lookup;
     };
 
-    lookup
-        .attributes
-        .push(KeyValue::new(attr::HOST_ID, instance_id.clone()));
-
     // The ID is worth reporting on its own, so a role short of the Systems
-    // Manager permission still gets one attribute out of the lookup.
+    // Manager permission still gets something out of the lookup.
     let tags = tags(ssm, &instance_id, &mut lookup).await;
-    lookup.attributes.extend(tags);
+
+    lookup.instance = Some(ManagedInstance {
+        id: instance_id,
+        tags,
+    });
 
     lookup
 }
@@ -236,8 +228,12 @@ async fn managed_instance_id(
     Some(instance_id.to_string())
 }
 
-/// Lists the tags on a managed instance, one attribute to a tag.
-async fn tags(ssm: &aws_sdk_ssm::Client, instance_id: &str, lookup: &mut Lookup) -> Vec<KeyValue> {
+/// Lists the tags on a managed instance.
+async fn tags(
+    ssm: &aws_sdk_ssm::Client,
+    instance_id: &str,
+    lookup: &mut Lookup,
+) -> BTreeMap<String, String> {
     let tags = ssm
         .list_tags_for_resource()
         .resource_type(ResourceTypeForTagging::ManagedInstance)
@@ -249,22 +245,13 @@ async fn tags(ssm: &aws_sdk_ssm::Client, instance_id: &str, lookup: &mut Lookup)
         Ok(tags) => tags,
         Err(error) => {
             lookup.note(explain("ssm:ListTagsForResource", &error));
-            return Vec::new();
+            return BTreeMap::new();
         }
     };
 
     tags.tag_list()
         .iter()
-        .map(|tag| {
-            KeyValue::new(
-                format!(
-                    "{}{}",
-                    attr::AWS_ECS_CONTAINER_INSTANCE_TAG_PREFIX,
-                    tag.key()
-                ),
-                tag.value().to_string(),
-            )
-        })
+        .map(|tag| (tag.key().to_string(), tag.value().to_string()))
         .collect()
 }
 
@@ -394,23 +381,15 @@ mod tests {
             })
     }
 
-    /// The attributes of a lookup, as key and value strings.
-    fn attributes_of(lookup: &Lookup) -> Vec<(String, String)> {
-        lookup
-            .attributes
-            .iter()
-            .map(|kv| (kv.key.to_string(), kv.value.to_string()))
-            .collect()
-    }
-
-    #[test]
-    fn only_the_external_launch_type_is_ecs_anywhere() {
-        assert!(is_external("EXTERNAL"));
-        assert!(is_external("external"));
-
-        assert!(!is_external("EC2"));
-        assert!(!is_external("FARGATE"));
-        assert!(!is_external(""));
+    /// The instance a lookup found, with the given tags on it.
+    fn instance(tags: &[(&str, &str)]) -> Option<ManagedInstance> {
+        Some(ManagedInstance {
+            id: INSTANCE_ID.to_string(),
+            tags: tags
+                .iter()
+                .map(|(key, value)| (key.to_string(), value.to_string()))
+                .collect(),
+        })
     }
 
     #[tokio::test]
@@ -428,18 +407,8 @@ mod tests {
         let lookup = managed_instance(&ecs, &ssm, CLUSTER, TASK_ARN).await;
 
         assert_eq!(
-            attributes_of(&lookup),
-            [
-                (attr::HOST_ID.to_string(), INSTANCE_ID.to_string()),
-                (
-                    "aws.ecs.container_instance.tag.Env".to_string(),
-                    "production".to_string()
-                ),
-                (
-                    "aws.ecs.container_instance.tag.Rack".to_string(),
-                    "b12".to_string()
-                ),
-            ]
+            lookup.instance,
+            instance(&[("Env", "production"), ("Rack", "b12")])
         );
         assert_eq!(lookup.notices, Vec::<String>::new());
     }
@@ -455,10 +424,7 @@ mod tests {
 
         let lookup = managed_instance(&ecs, &ssm, CLUSTER, TASK_ARN).await;
 
-        assert_eq!(
-            attributes_of(&lookup),
-            [(attr::HOST_ID.to_string(), INSTANCE_ID.to_string())]
-        );
+        assert_eq!(lookup.instance, instance(&[]));
         assert_eq!(lookup.notices, Vec::<String>::new());
     }
 
@@ -477,7 +443,7 @@ mod tests {
 
         let lookup = managed_instance(&ecs, &ssm, CLUSTER, TASK_ARN).await;
 
-        assert_eq!(attributes_of(&lookup), []);
+        assert_eq!(lookup.instance, None);
         assert_eq!(
             lookup.notices,
             ["the task role cannot call ecs:DescribeTasks"]
@@ -499,7 +465,7 @@ mod tests {
 
         let lookup = managed_instance(&ecs, &ssm, CLUSTER, TASK_ARN).await;
 
-        assert_eq!(attributes_of(&lookup), []);
+        assert_eq!(lookup.instance, None);
         assert_eq!(
             lookup.notices,
             ["the task role cannot call ecs:DescribeContainerInstances"]
@@ -521,7 +487,7 @@ mod tests {
 
         let lookup = managed_instance(&ecs, &ssm, CLUSTER, TASK_ARN).await;
 
-        assert_eq!(attributes_of(&lookup), []);
+        assert_eq!(lookup.instance, None);
 
         // Anything but a missing permission says so in the service's own words.
         let [notice] = &lookup.notices[..] else {
@@ -544,7 +510,7 @@ mod tests {
 
         let lookup = managed_instance(&ecs, &ssm, CLUSTER, TASK_ARN).await;
 
-        assert_eq!(attributes_of(&lookup), []);
+        assert_eq!(lookup.instance, None);
         assert_eq!(
             lookup.notices,
             [format!("ECS knows no container instance for {TASK_ARN}")]
@@ -569,7 +535,7 @@ mod tests {
 
         let lookup = managed_instance(&ecs, &ssm, CLUSTER, TASK_ARN).await;
 
-        assert_eq!(attributes_of(&lookup), []);
+        assert_eq!(lookup.instance, None);
         assert_eq!(
             lookup.notices,
             [format!("ECS knows no container instance for {TASK_ARN}")]
@@ -593,7 +559,7 @@ mod tests {
 
         let lookup = managed_instance(&ecs, &ssm, CLUSTER, TASK_ARN).await;
 
-        assert_eq!(attributes_of(&lookup), []);
+        assert_eq!(lookup.instance, None);
         assert_eq!(
             lookup.notices,
             [format!(
@@ -619,10 +585,7 @@ mod tests {
         let lookup = managed_instance(&ecs, &ssm, CLUSTER, TASK_ARN).await;
 
         // The ID survives the tags the lookup could not reach.
-        assert_eq!(
-            attributes_of(&lookup),
-            [(attr::HOST_ID.to_string(), INSTANCE_ID.to_string())]
-        );
+        assert_eq!(lookup.instance, instance(&[]));
         assert_eq!(
             lookup.notices,
             ["the task role cannot call ssm:ListTagsForResource"]
@@ -646,10 +609,7 @@ mod tests {
 
         let lookup = managed_instance(&ecs, &ssm, CLUSTER, TASK_ARN).await;
 
-        assert_eq!(
-            attributes_of(&lookup),
-            [(attr::HOST_ID.to_string(), INSTANCE_ID.to_string())]
-        );
+        assert_eq!(lookup.instance, instance(&[]));
 
         let [notice] = &lookup.notices[..] else {
             panic!("expected one notice, got {:?}", lookup.notices);
@@ -660,10 +620,10 @@ mod tests {
         );
     }
 
-    /// A lookup that found one attribute and had nothing to complain about.
+    /// A lookup that found an instance and had nothing to complain about.
     fn found() -> Lookup {
         Lookup {
-            attributes: vec![KeyValue::new(attr::HOST_ID, INSTANCE_ID)],
+            instance: instance(&[]),
             notices: Vec::new(),
         }
     }
@@ -684,7 +644,7 @@ mod tests {
     fn detached_gives_up_at_the_deadline() {
         let lookup = detached(Duration::ZERO, std::future::pending());
 
-        assert_eq!(lookup.attributes, []);
+        assert_eq!(lookup.instance, None);
         assert_eq!(
             lookup.notices,
             ["gave up on the managed instance after 0 seconds"]
@@ -695,7 +655,7 @@ mod tests {
     fn detached_survives_a_panic() {
         let lookup = detached(LOOKUP_TIMEOUT, async { panic!("the lookup gave out") });
 
-        assert_eq!(lookup.attributes, []);
+        assert_eq!(lookup.instance, None);
         assert_eq!(lookup.notices, ["the managed instance lookup panicked"]);
     }
 }
